@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="timeBlue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#93C5FD"/>
+      <stop offset="50%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <filter id="glowBlue" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+  <circle cx="60" cy="60" r="50" fill="url(#timeBlue)" opacity="0.15" filter="url(#glowBlue)"/>
+  <!-- Hourglass Frame -->
+  <path d="M40 28 L80 28 L80 34 L66 56 L66 64 L80 86 L80 92 L40 92 L40 86 L54 64 L54 56 L40 34 Z" fill="#1E293B" stroke="url(#timeBlue)" stroke-width="3"/>
+  <!-- Hourglass Flowing Sand -->
+  <path d="M48 36 L72 36 L60 56 Z" fill="url(#timeBlue)"/>
+  <path d="M60 64 L70 84 L50 84 Z" fill="url(#timeBlue)"/>
+  <!-- Time Boost +30s Badge -->
+  <circle cx="85" cy="85" r="18" fill="#10B981" stroke="#FFF" stroke-width="2" filter="url(#glowBlue)"/>
+  <text x="85" y="90" fill="#FFF" font-family="monospace" font-weight="900" font-size="11" text-anchor="middle">+30s</text>
+</svg>

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="shieldGreen" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6EE7B7"/>
+      <stop offset="50%" stop-color="#10B981"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </linearGradient>
+    <filter id="glowGreen" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+  <circle cx="60" cy="60" r="50" fill="url(#shieldGreen)" opacity="0.15" filter="url(#glowGreen)"/>
+  <!-- Shield Outer Rim -->
+  <path d="M60 25 L88 36 C88 66 75 88 60 96 C45 88 32 66 32 36 Z" fill="#1E293B" stroke="url(#shieldGreen)" stroke-width="3"/>
+  <!-- Shield Inner Crest -->
+  <path d="M60 33 L80 41 C80 64 70 81 60 87 C50 81 40 64 40 41 Z" fill="url(#shieldGreen)" opacity="0.4"/>
+  <!-- Protection Star / Cross Emblem -->
+  <polygon points="60,45 64,56 75,56 66,63 70,74 60,67 50,74 54,63 45,56 56,56" fill="#FFF" filter="url(#glowGreen)"/>
+</svg>

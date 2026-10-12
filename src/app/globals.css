@@ -1,0 +1,168 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-deep: #03060c;
+  --bg-surface: #070d18;
+  --bg-elevated: #0d1527;
+  --primary: #21d4d8;
+  --gold: #f5b942;
+  --blue: #3b82f6;
+  --purple: #8b5cf6;
+  --emerald: #10b981;
+  --rose: #f43f5e;
+}
+
+body {
+  background-color: var(--bg-deep);
+  color: #f8fafc;
+  font-family: var(--font-ibm-plex-arabic), system-ui, -apple-system, sans-serif;
+  direction: rtl;
+  text-align: right;
+  overflow-x: hidden;
+  background-image: 
+    radial-gradient(circle at 50% -10%, rgba(33, 212, 216, 0.16) 0%, transparent 50%),
+    radial-gradient(circle at 100% 100%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 0% 50%, rgba(245, 185, 66, 0.05) 0%, transparent 40%),
+    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 36px 36px, 36px 36px;
+  background-attachment: fixed;
+}
+
+/* Monospace Numbers with Space Grotesk / Digital Glow */
+.digi-number {
+  font-family: var(--font-space-grotesk), ui-monospace, SFMono-Regular, "Roboto Mono", monospace;
+  font-feature-settings: "tnum" 1, "zero" 1;
+  letter-spacing: -0.04em;
+}
+
+/* Premium Agency-Grade Glassmorphism Deck */
+.hud-deck {
+  background: linear-gradient(135deg, rgba(11, 19, 36, 0.85) 0%, rgba(6, 11, 22, 0.94) 100%);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid rgba(33, 212, 216, 0.4);
+  border-radius: 24px;
+  box-shadow: 
+    0 24px 60px -15px rgba(0, 0, 0, 0.85),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.15),
+    inset 0 0 40px 0 rgba(33, 212, 216, 0.03);
+  position: relative;
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.hud-deck:hover {
+  border-color: rgba(33, 212, 216, 0.35);
+  box-shadow: 
+    0 30px 70px -15px rgba(0, 0, 0, 0.95),
+    0 0 35px -5px rgba(33, 212, 216, 0.16),
+    inset 0 0 35px 0 rgba(33, 212, 216, 0.06);
+  transform: translateY(-2px);
+}
+
+/* Large Digi Metric Card with Ambient Colored Glows */
+.digi-stat-card {
+  background: linear-gradient(165deg, rgba(14, 23, 44, 0.88) 0%, rgba(7, 12, 24, 0.96) 100%);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
+  padding: 1.75rem;
+  box-shadow: 0 16px 45px -12px rgba(0, 0, 0, 0.7);
+  position: relative;
+  overflow: hidden;
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.digi-stat-card:hover {
+  border-color: rgba(33, 212, 216, 0.4);
+  transform: translateY(-4px) scale(1.01);
+  box-shadow: 0 24px 55px -12px rgba(0, 0, 0, 0.85), 0 0 30px -5px rgba(33, 212, 216, 0.18);
+}
+
+/* Luxury Interactive CTA Button */
+.btn-primary-glow {
+  background: linear-gradient(135deg, #21d4d8 0%, #3b82f6 100%);
+  color: #03060c;
+  font-weight: 800;
+  border-radius: 14px;
+  padding: 0.75rem 1.75rem;
+  box-shadow: 0 10px 25px -5px rgba(33, 212, 216, 0.4), inset 0 1px 0 0 rgba(255, 255, 255, 0.4);
+  transition: all 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-primary-glow:hover {
+  box-shadow: 0 14px 35px -5px rgba(33, 212, 216, 0.6), 0 0 25px 0 rgba(59, 130, 246, 0.4);
+  transform: translateY(-2px);
+  filter: brightness(1.08);
+}
+
+.btn-primary-glow:active {
+  transform: translateY(0);
+}
+
+/* High-Density Cyber Table */
+.digi-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.digi-table thead th {
+  background: rgba(8, 14, 27, 0.85);
+  color: #94a3b8;
+  font-family: var(--font-space-grotesk), monospace;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1.1rem 1.4rem;
+  border-bottom: 1px solid rgba(33, 212, 216, 0.25);
+}
+
+.digi-table tbody tr {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.digi-table tbody tr:hover {
+  background: rgba(33, 212, 216, 0.06);
+  box-shadow: inset 3px 0 0 0 #21d4d8;
+  transform: scale(1.002);
+}
+
+.digi-table tbody td {
+  padding: 1.1rem 1.4rem;
+  font-size: 0.9rem;
+}
+
+/* Micro-interaction Pulse */
+@keyframes soft-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(33, 212, 216, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(33, 212, 216, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(33, 212, 216, 0); }
+}
+
+.live-pulse-badge {
+  animation: soft-pulse 2.2s infinite;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #03060c;
+}
+::-webkit-scrollbar-thumb {
+  background: #19253d;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2b3d63;
+}

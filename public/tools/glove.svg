@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="gloveGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFE066"/>
+      <stop offset="50%" stop-color="#F5B942"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+    <filter id="glowGold" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+  <!-- Background Glow -->
+  <circle cx="60" cy="60" r="50" fill="url(#gloveGold)" opacity="0.15" filter="url(#glowGold)"/>
+  <!-- Glove Gauntlet Body -->
+  <path d="M40 85 L80 85 L85 65 L88 45 C88 38 82 35 78 38 L75 42 L72 32 C72 26 66 24 62 28 L60 38 L56 30 C55 24 49 24 46 29 L46 45 L40 50 C36 53 36 60 40 64 L45 68 L40 85 Z" fill="url(#gloveGold)" stroke="#FFF" stroke-width="2"/>
+  <!-- Multiplier Badge (x5) -->
+  <rect x="68" y="72" width="40" height="24" rx="6" fill="#DC2626" stroke="#FEF08A" stroke-width="2" filter="url(#glowGold)"/>
+  <text x="88" y="89" fill="#FFF" font-family="monospace" font-weight="900" font-size="16" text-anchor="middle">x5</text>
+  <!-- Knuckle Energy Gem -->
+  <circle cx="58" cy="55" r="5" fill="#60A5FA" stroke="#FFF" stroke-width="1.5"/>
+</svg>

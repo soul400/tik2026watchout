@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { prisma } from "../src/lib/prisma";
 import { SmartInventoryService } from "../src/lib/smart-inventory";
 import { BattleEngine } from "../src/lib/battle-engine";
@@ -258,5 +258,51 @@ describe("Cross-Section Integrity & Regression Prevention Suite", () => {
     });
 
     expect(aggregate._sum.totalDiamonds).toBeGreaterThanOrEqual(37000);
+  });
+
+  afterAll(async () => {
+    // Purge any test-generated fixtures
+    await prisma.toolConsumption.deleteMany({
+      where: {
+        OR: [
+          { supporter: { platformUserId: { startsWith: "supporter_cross_" } } },
+          { notes: { contains: "Tactical Fog Triggered in PK Round" } },
+        ],
+      },
+    });
+
+    await prisma.toolGrant.deleteMany({
+      where: {
+        OR: [
+          { supporter: { platformUserId: { startsWith: "supporter_cross_" } } },
+          { sourceEventId: { startsWith: "evt_gift_tactical_" } },
+          { sourceEventId: { startsWith: "grant_fog_" } },
+          { sourceEventId: { startsWith: "notice_tiktok_" } },
+          { sourceEventId: { startsWith: "expired_grant_" } },
+        ],
+      },
+    });
+
+    await prisma.battleParticipant.deleteMany({
+      where: {
+        platformUserId: "opponent_user_cross",
+      },
+    });
+
+    await prisma.battle.deleteMany({
+      where: {
+        participants: { some: { platformUserId: "opponent_user_cross" } },
+      },
+    });
+
+    await prisma.supporter.deleteMany({
+      where: {
+        OR: [
+          { platformUserId: { startsWith: "supporter_cross_" } },
+          { platformUserId: { startsWith: "agg_" } },
+          { displayName: { contains: "التكامل" } },
+        ],
+      },
+    });
   });
 });

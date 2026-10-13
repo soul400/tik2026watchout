@@ -65,27 +65,27 @@ export function ActiveBattleArena({ initialBattle, streamer, isLive }: ActiveBat
   const rawParticipants = battle?.participants || [];
   const hostUsernames = ["mohra.2000", "mohra"];
 
-  // Deduplicate and filter out ghost accounts
-  const sanitized = rawParticipants.filter((p) => {
-    if (p.teamNumber === 2 && hostUsernames.includes(p.username.toLowerCase())) {
-      return false;
-    }
-    if (p.teamNumber === 2 && p.displayName.includes("المهره")) {
-      return false;
-    }
-    return true;
-  });
+  // Deduplicate by platformUserId and ensure host never leaks into opponent team
+  const seenUids = new Set<string>();
+  const sanitized: Participant[] = [];
 
-  let team1 = sanitized.filter((p) => p.teamNumber === 1);
-  let team2 = sanitized.filter((p) => p.teamNumber === 2);
+  for (const p of rawParticipants) {
+    const isHostName = hostUsernames.includes(p.username.toLowerCase()) || 
+      p.displayName.includes("المهره") || 
+      p.displayName.includes("مهرة");
 
-  // Auto-balance if it is a 2v2 and team1 only has host while team2 has 3 players
-  if (battle?.battleType === "2V2" && team1.length === 1 && team2.length === 3) {
-    // The first player in team2 is the ally alongside host
-    const ally = team2[0];
-    team1 = [...team1, { ...ally, teamNumber: 1 }];
-    team2 = team2.slice(1);
+    if (p.teamNumber === 2 && isHostName) {
+      continue;
+    }
+
+    if (!seenUids.has(p.platformUserId)) {
+      seenUids.add(p.platformUserId);
+      sanitized.push(p);
+    }
   }
+
+  const team1 = sanitized.filter((p) => p.teamNumber === 1);
+  const team2 = sanitized.filter((p) => p.teamNumber === 2);
 
   const team1Score = Math.max(0, battle?.team1Score || 0);
   const team2Score = Math.max(0, battle?.team2Score || 0);

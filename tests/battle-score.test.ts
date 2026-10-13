@@ -454,4 +454,52 @@ describe("BattleScoreResolver — Comprehensive Test Suite (15 Critical Scenario
     expect(result.team2Score).toBe(2100);
     expect(result.diagnostics.unmatchedAnchors).toContain("or_xyz");
   });
+
+  // SCENARIO 16: 2v2 Inverted Internal teamId (TikTok gives teamId:1 to Opponents and teamId:2 to Host)
+  it("Scenario 16: Resolves 2v2 accurately when TikTok assigns teamId:1 to opponents and teamId:2 to host", () => {
+    const battle2v2: BattleContext = {
+      id: battleId,
+      battleType: "2V2",
+      currentTeam1Score: 0,
+      currentTeam2Score: 0,
+      participants: [
+        hostParticipant, // Team 1
+        allyParticipant, // Team 1
+        opponent1Participant, // Team 2
+        opponent2Participant, // Team 2
+      ],
+    };
+
+    // Inverted payload: teamId: 1 has rivals, teamId: 2 has host
+    const invertedTeamArmiesPayload = {
+      battleId,
+      timestamp: Date.now(),
+      teamArmies: [
+        {
+          teamId: "1",
+          teamTotalScore: "1420",
+          teamUser: [
+            { userId: opponent1Participant.platformUserId, score: "820" },
+            { userId: opponent2Participant.platformUserId, score: "600" },
+          ],
+        },
+        {
+          teamId: "2",
+          teamTotalScore: "95300",
+          teamUser: [
+            { userId: hostParticipant.platformUserId, score: "80000" },
+            { userId: allyParticipant.platformUserId, score: "15300" },
+          ],
+        },
+      ],
+    };
+
+    const result = BattleScoreResolver.resolveScores(battle2v2, invertedTeamArmiesPayload);
+    expect(result.accepted).toBe(true);
+    // Host team (Team 1) must receive 95,300, Opponents (Team 2) must receive 1,420
+    expect(result.team1Score).toBe(95300);
+    expect(result.team2Score).toBe(1420);
+    expect(result.diagnostics.matchedAnchorsTeam1).toContain(hostParticipant.platformUserId.slice(-6));
+    expect(result.diagnostics.matchedAnchorsTeam2).toContain(opponent1Participant.platformUserId.slice(-6));
+  });
 });

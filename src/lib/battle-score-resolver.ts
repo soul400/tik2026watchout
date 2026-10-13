@@ -231,27 +231,29 @@ export class BattleScoreResolver {
           if (uid) {
             if (team1Lookup.has(uid)) {
               assignedToTeam = 1;
+              diagnostics.matchedAnchorsTeam1.push(uid.slice(-6));
               break;
             } else if (team2Lookup.has(uid)) {
               assignedToTeam = 2;
+              diagnostics.matchedAnchorsTeam2.push(uid.slice(-6));
               break;
             }
           }
         }
 
-        // If no members array, fallback to anchor match if only 2 teams exist and we have anchor scores
+        // If no members array, verify via anchor scores from Method A if available
         if (!assignedToTeam && rawEvent.teamArmies.length === 2) {
-          const tId = Number(teamEntry.teamId);
-          // If we already resolved one team via anchor, map the other
           if (team1Candidate !== null && validScore === team1Candidate) {
             assignedToTeam = 1;
           } else if (team2Candidate !== null && validScore === team2Candidate) {
             assignedToTeam = 2;
-          } else if (tId === 1 && team1Candidate === null) {
-            // Last-resort fallback ONLY when anchor matching was impossible
-            assignedToTeam = 1;
-          } else if (tId === 2 && team2Candidate === null) {
-            assignedToTeam = 2;
+          } else if (team1Candidate === null && team2Candidate === null) {
+            const tId = Number(teamEntry.teamId);
+            if (tId === 1) {
+              assignedToTeam = 1;
+            } else if (tId === 2) {
+              assignedToTeam = 2;
+            }
           }
         }
 

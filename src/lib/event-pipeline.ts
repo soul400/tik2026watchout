@@ -340,111 +340,211 @@ export class LiveEventPipeline {
 
       if (!existing) {
         // Extract anchors / participants
-        const participantsData: any[] = [];
-        
-        // Parse participants from anchorsInfo and teamMember
+        // 1. Fetch host streamer account
         const hostStreamer = await prisma.streamerAccount.findFirst({
           where: { tenantId: this.tenantId },
         });
 
-        const hostUid = hostStreamer?.platformUserId || "mohra_official";
         const hostUsername = hostStreamer?.username || "mohra.2000";
+        let knownHostUid = hostStreamer?.platformUserId || "";
 
-        // Map team IDs if teamMember is present
-        const teamMemberMap = new Map<string, number>();
-        if (Array.isArray(data.teamMember)) {
-          data.teamMember.forEach((tm: any, idx: number) => {
-            const teamNum = Number(tm.teamId || idx + 1);
-            if (Array.isArray(tm.userId)) {
-              tm.userId.forEach((uid: any) => {
-                teamMemberMap.set(String(uid), teamNum);
-              });
-            }
-          });
+        // 2. Parse all anchors from anchorsInfo into a normalized list
+        interface NormalizedAnchor {
+          uid: string;
+          username: string;
+          displayName: string;
+          avatarUrl: string | null;
+          isHost: boolean;
         }
 
-        const rawAnchors: any[] = [];
+        const normalizedAnchors: NormalizedAnchor[] = [];
+
         if (Array.isArray(data.anchorsInfo)) {
           for (const item of data.anchorsInfo) {
-            const user = item.value?.user || item.user || {};
-            const uid = String(user.userId || user.displayId || "");
-            const uname = String(user.displayId || user.nickName || "");
-            if (uid && uname) {
-              // Exclude host account completely by username or displayId or uid
-              if (
-                uid === hostUid ||
-                uname === hostUsername ||
-                uname.toLowerCase().includes("mohra") ||
-                user.displayId === hostUsername
-              ) {
-                continue;
+            const user = item.value?.user || item.user || item.value || item || {};
+            const uid = String(
+              user.userId ||
+              user.userIdStr ||
+              user.id ||
+              item.key ||
+              ""
+            ).trim();
+            const uname = String(
+              user.displayId ||
+              user.uniqueId ||
+              user.username ||
+              ""
+            ).trim();
+            const displayName = String(
+              user.nickName ||
+              user.nickname ||
+              uname ||
+              "مشارك"
+            ).trim();
+            const avatarUrl =
+              user.avatarThumb?.urlList?.[0] ||
+              user.avatarThumb?.urls?.[0] ||
+              user.avatarUrl ||
+              null;
+
+            if (uid || uname) {
+              const isHost =
+                (uname && (
+                  uname.toLowerCase() === hostUsername.toLowerCase() ||
+                  uname.toLowerCase().includes("mohra")
+                )) ||
+                (uid && knownHostUid && uid === knownHostUid) ||
+                displayName.toLowerCase().includes("mohra") ||
+                displayName.includes("مهرة") ||
+                displayName.includes("المهره");
+
+              if (isHost && uid && uid !== knownHostUid) {
+                knownHostUid = uid;
+                if (hostStreamer) {
+                  await prisma.streamerAccount.update({
+                    where: { id: hostStreamer.id },
+                    data: { platformUserId: uid },
+                  }).catch(() => {});
+                }
               }
+
               // Deduplicate
-              if (!rawAnchors.some((a) => a.uid === uid || a.uname === uname)) {
-                rawAnchors.push({
-                  uid,
-                  uname,
-                  displayName: String(user.nickName || uname || "لاعب"),
-                  avatarUrl: user.avatarThumb?.urlList?.[0] || null,
+              if (!normalizedAnchors.some((a) => a.uid === uid || (uname && a.username === uname))) {
+                normalizedAnchors.push({
+                  uid: uid || `anchor_${uname}`,
+                  username: uname || `user_${uid}`,
+                  displayName,
+                  avatarUrl,
+                  isHost,
                 });
               }
             }
           }
         }
 
-        // Host is always Team 1
+        // 3. Ensure host is present in normalized list
+        let hostAnchor = normalizedAnchors.find((a) => a.isHost);
+        if (!hostAnchor) {
+          hostAnchor = {
+            uid: knownHostUid || "mohra_official",
+            username: hostUsername,
+            displayName: hostStreamer?.displayName || "مهـرة 🇸🇦",
+            avatarUrl: hostStreamer?.avatarUrl || "/mohra-avatar.webp",
+            isHost: true,
+          };
+          normalizedAnchors.unshift(hostAnchor);
+        }
+
+        // 4. Map teams from data.teamMember / data.teamArmies
+        // Determine which raw teamId belongs to the Host
+        let hostTeamRawId: string | null = null;
+
+        if (Array.isArray(data.teamMember)) {
+          for (const tm of data.teamMember) {
+            const rawTid = String(tm.teamId ?? "");
+            const memberUids = (tm.userId || []).map((u: any) => String(u).trim());
+            if (memberUids.includes(hostAnchor.uid) || memberUids.some((u: string) => normalizedAnchors.find((a) => a.uid === u)?.isHost)) {
+              hostTeamRawId = rawTid;
+              break;
+            }
+          }
+        }
+
+        if (!hostTeamRawId && Array.isArray(data.teamArmies)) {
+          for (const teamEntry of data.teamArmies) {
+            const rawTid = String(teamEntry.teamId ?? "");
+            const members = (teamEntry.teamUser || teamEntry.userArmies || []).map((m: any) =>
+              String(m.userId || m.userIdStr || m.user?.userId || "").trim()
+            );
+            if (members.includes(hostAnchor.uid) || members.some((u: string) => normalizedAnchors.find((a) => a.uid === u)?.isHost)) {
+              hostTeamRawId = rawTid;
+              break;
+            }
+          }
+        }
+
+        // Build participant mapping
+        const userToTeamMap = new Map<string, number>();
+
+        if (hostTeamRawId && Array.isArray(data.teamMember)) {
+          for (const tm of data.teamMember) {
+            const rawTid = String(tm.teamId ?? "");
+            const assignedTeam = rawTid === hostTeamRawId ? 1 : 2;
+            if (Array.isArray(tm.userId)) {
+              for (const uid of tm.userId) {
+                userToTeamMap.set(String(uid).trim(), assignedTeam);
+              }
+            }
+          }
+        } else if (hostTeamRawId && Array.isArray(data.teamArmies)) {
+          for (const teamEntry of data.teamArmies) {
+            const rawTid = String(teamEntry.teamId ?? "");
+            const assignedTeam = rawTid === hostTeamRawId ? 1 : 2;
+            const members = teamEntry.teamUser || teamEntry.userArmies || [];
+            for (const m of members) {
+              const uid = String(m.userId || m.userIdStr || m.user?.userId || "").trim();
+              if (uid) userToTeamMap.set(uid, assignedTeam);
+            }
+          }
+        }
+
+        // 5. Assign team numbers to normalized anchors
+        const participantsData: any[] = [];
+        const otherAnchors = normalizedAnchors.filter((a) => !a.isHost);
+
+        // Host is ALWAYS Team 1
         participantsData.push({
           teamNumber: 1,
-          platformUserId: hostUid,
-          username: hostUsername,
-          displayName: hostStreamer?.displayName || "مهـرة",
-          avatarUrl: hostStreamer?.avatarUrl || "/mohra-avatar.webp",
+          platformUserId: hostAnchor.uid,
+          username: hostAnchor.username,
+          displayName: hostAnchor.displayName,
+          avatarUrl: hostAnchor.avatarUrl,
         });
 
-        const otherAnchors = rawAnchors;
+        if (normalizedAnchors.length >= 4 || otherAnchors.length >= 3) {
+          // 2v2 Match: exactly 1 teammate in Team 1 + 2 opponents in Team 2
+          let assignedAlly = false;
 
-        if (otherAnchors.length >= 3) {
-          // 2v2 Match: 1 teammate (Team 1) + 2 opponents (Team 2)
-          let hostTeamId = teamMemberMap.get(hostUid);
-          let assignedTeammate = false;
-
-          otherAnchors.forEach((anchor, index) => {
-            let assignedTeam = 2;
-            const mappedTeam = teamMemberMap.get(anchor.uid);
-
-            if (mappedTeam && hostTeamId && mappedTeam === hostTeamId) {
-              assignedTeam = 1;
-              assignedTeammate = true;
-            } else if (!assignedTeammate && (index === 0 || mappedTeam === 1)) {
-              // First co-host anchor alongside host is teammate
-              assignedTeam = 1;
-              assignedTeammate = true;
+          // First pass: use verified userToTeamMap
+          otherAnchors.forEach((anchor) => {
+            const mappedTeam = userToTeamMap.get(anchor.uid);
+            if (mappedTeam === 1 && !assignedAlly) {
+              assignedAlly = true;
+              participantsData.push({
+                teamNumber: 1,
+                platformUserId: anchor.uid,
+                username: anchor.username,
+                displayName: anchor.displayName,
+                avatarUrl: anchor.avatarUrl,
+              });
             }
-
-            participantsData.push({
-              teamNumber: assignedTeam,
-              platformUserId: anchor.uid,
-              username: anchor.uname,
-              displayName: anchor.displayName,
-              avatarUrl: anchor.avatarUrl,
-            });
           });
-        } else if (otherAnchors.length === 1) {
-          // 1v1 Match: The only anchor is Team 2
-          participantsData.push({
-            teamNumber: 2,
-            platformUserId: otherAnchors[0].uid,
-            username: otherAnchors[0].uname,
-            displayName: otherAnchors[0].displayName,
-            avatarUrl: otherAnchors[0].avatarUrl,
+
+          // Second pass: fill remaining anchors
+          otherAnchors.forEach((anchor) => {
+            const alreadyAdded = participantsData.some((p) => p.platformUserId === anchor.uid);
+            if (!alreadyAdded) {
+              let teamNumber = 2;
+              if (!assignedAlly) {
+                teamNumber = 1;
+                assignedAlly = true;
+              }
+              participantsData.push({
+                teamNumber,
+                platformUserId: anchor.uid,
+                username: anchor.username,
+                displayName: anchor.displayName,
+                avatarUrl: anchor.avatarUrl,
+              });
+            }
           });
         } else {
-          // Standard / 2 opponents
+          // 1v1 Match: all other anchors are Team 2
           otherAnchors.forEach((anchor) => {
             participantsData.push({
               teamNumber: 2,
               platformUserId: anchor.uid,
-              username: anchor.uname,
+              username: anchor.username,
               displayName: anchor.displayName,
               avatarUrl: anchor.avatarUrl,
             });

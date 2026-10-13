@@ -47,17 +47,15 @@ export default async function DashboardPage() {
     take: 6,
   });
 
-  const toolGrants = await prisma.toolGrant.findMany({
-    where: { tenantId, status: "AVAILABLE" },
-    include: { toolDefinition: true },
+  const { SmartInventoryService } = await import("@/lib/smart-inventory");
+  const inventoryCounters = await SmartInventoryService.getInventoryCounters(tenantId);
+  const availableToolsCount = inventoryCounters.reduce((acc, c) => acc + c.totalAvailable, 0);
+
+  const diamondsAggregate = await prisma.supporter.aggregate({
+    where: { tenantId },
+    _sum: { totalDiamonds: true },
   });
-
-  const availableToolsCount = toolGrants.reduce(
-    (acc, g) => acc + (g.quantityGranted - g.quantityConsumed),
-    0
-  );
-
-  const totalDiamondsAccumulated = topSupporters.reduce((acc, s) => acc + s.totalDiamonds, 0);
+  const totalDiamondsAccumulated = diamondsAggregate._sum.totalDiamonds || 0;
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-16">

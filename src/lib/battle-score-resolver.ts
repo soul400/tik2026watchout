@@ -63,11 +63,16 @@ export class BattleScoreResolver {
   private static highestVerifiedScores = new Map<string, { team1: number; team2: number }>();
 
   /**
-   * Resets internal tracking for a specific battle (e.g. when completed or reset).
+   * Resets internal tracking for a specific battle or all battles if omitted (e.g. on streamEnd).
    */
-  static resetBattleTracking(battleId: string): void {
-    this.lastTimestamps.delete(battleId);
-    this.highestVerifiedScores.delete(battleId);
+  static resetBattleTracking(battleId?: string): void {
+    if (battleId) {
+      this.lastTimestamps.delete(battleId);
+      this.highestVerifiedScores.delete(battleId);
+    } else {
+      this.lastTimestamps.clear();
+      this.highestVerifiedScores.clear();
+    }
   }
 
   /**

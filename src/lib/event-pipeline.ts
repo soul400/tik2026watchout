@@ -112,6 +112,14 @@ export class LiveEventPipeline {
         },
       });
 
+      // Auto-elevate supporter to CONTINUOUS tier if total diamonds reached >= 10,000
+      if (supporter.totalDiamonds >= 10000 && supporter.category !== "CONTINUOUS") {
+        await prisma.supporter.update({
+          where: { id: supporter.id },
+          data: { category: "CONTINUOUS" },
+        }).catch(() => {});
+      }
+
       // 3. Update Live Session Totals
       await prisma.liveSession.update({
         where: { id: this.liveSessionId },
@@ -141,11 +149,17 @@ export class LiveEventPipeline {
       if (detectedToolKey) {
         try {
           const { SmartInventoryService } = await import("./smart-inventory");
+          const activeBattle = await prisma.battle.findFirst({
+            where: { tenantId: this.tenantId, status: "IN_PROGRESS" },
+            select: { id: true },
+          });
+
           await SmartInventoryService.grantTool({
             tenantId: this.tenantId,
             supporterId: supporter.id,
             toolKey: detectedToolKey,
             quantity: repeatCount,
+            battleId: activeBattle?.id || undefined,
             sourceEventId: dedupKey,
             auditReference: `Gift: ${data.gift?.name || data.giftName} x${repeatCount}`,
           });
@@ -542,7 +556,18 @@ export class LiveEventPipeline {
   async handleBattleItemCard(data: any): Promise<void> {
     this.stats.receivedCount++;
     try {
-      const battleId = String(data.battleId || "");
+      let targetBattleId = String(data.battleId || "");
+      if (!targetBattleId) {
+        const activeBattle = await prisma.battle.findFirst({
+          where: { tenantId: this.tenantId, status: "IN_PROGRESS" },
+          orderBy: { startedAt: "desc" },
+          select: { id: true },
+        });
+        if (activeBattle) {
+          targetBattleId = activeBattle.id;
+        }
+      }
+
       const { SmartInventoryService } = await import("./smart-inventory");
 
       // 1. Check AwardCardNotice (Tools awarded at the end or during battle)
@@ -576,16 +601,41 @@ export class LiveEventPipeline {
               },
             });
 
-            // Grant Glove (GLOVE) by default for battle awards or detect type
-            const dedupKey = `card_${battleId}_${uid}_${Date.now()}`;
+            // Detect tool key from notice data or fallback to GLOVE
+            let toolKey = "GLOVE";
+            const rawCardType = String(
+              data.awardCardNotice?.cardType ||
+              data.awardCardNotice?.cardName ||
+              data.awardCardNotice?.toolKey ||
+              ""
+            ).toLowerCase();
+
+            if (rawCardType.includes("fog") || rawCardType.includes("smoke") || rawCardType === "2") {
+              toolKey = "BOOST_FOG";
+            } else if (rawCardType.includes("time") || rawCardType === "3") {
+              toolKey = "TIME_EXTENDER";
+            } else if (rawCardType.includes("speed") || rawCardType === "4") {
+              toolKey = "SPEED_BOOSTER";
+            } else if (rawCardType.includes("hammer") || rawCardType === "5") {
+              toolKey = "HAMMER";
+            } else if (rawCardType.includes("shield") || rawCardType === "6") {
+              toolKey = "SHIELD_DEFENSE";
+            }
+
+            // Derive deterministic dedupKey to prevent duplicate awards on network replay
+            const noticeId = data.awardCardNotice?.noticeId || data.common?.msgId || data.msgId;
+            const dedupKey = noticeId
+              ? `card_${targetBattleId || "live"}_${uid}_${noticeId}`
+              : `card_${targetBattleId || "live"}_${uid}_${data.awardCardNotice?.awardSeq || "single"}`;
+
             await SmartInventoryService.grantTool({
               tenantId: this.tenantId,
               supporterId: supporter.id,
-              toolKey: "GLOVE",
+              toolKey,
               quantity: 1,
-              battleId: battleId || undefined,
+              battleId: targetBattleId || undefined,
               sourceEventId: dedupKey,
-              auditReference: `TikTok Battle Item Card Award (Battle: ${battleId})`,
+              auditReference: `TikTok Battle Item Card Award (Battle: ${targetBattleId || "live"})`,
             }).catch(() => {});
           }
         }
@@ -635,7 +685,7 @@ export class LiveEventPipeline {
                 grantId: availableGrant.id,
                 supporterId: supporter.id,
                 quantity: 1,
-                battleId: battleId || undefined,
+                battleId: targetBattleId || undefined,
                 notes: `Live TikTok Battle Card Activation (${consumedToolKey})`,
               }).catch(() => {});
             }

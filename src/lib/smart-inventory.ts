@@ -29,8 +29,8 @@ export class SmartInventoryService {
   static async grantTool(params: ToolGrantParams) {
     const { tenantId, supporterId, toolKey, quantity, battleId, sourceEventId, auditReference } = params;
 
-    // 1. Fetch Tool Definition
-    const toolDef = await prisma.toolDefinition.findUnique({
+    // 1. Fetch or Auto-provision Tool Definition
+    let toolDef = await prisma.toolDefinition.findUnique({
       where: {
         tenantId_key: {
           tenantId,
@@ -39,8 +39,28 @@ export class SmartInventoryService {
       },
     });
 
-    if (!toolDef || !toolDef.isActive) {
-      throw new Error(`Tool definition '${toolKey}' not found or inactive for tenant.`);
+    if (!toolDef) {
+      const defaultNames: Record<string, { name: string; icon: string; color: string }> = {
+        GLOVE: { name: "القفاز التكتيكي (Glove x5)", icon: "ShieldAlert", color: "#F5B942" },
+        BOOST_FOG: { name: "الضباب المعزز (Boost Fog)", icon: "CloudFog", color: "#21D4D8" },
+        TIME_EXTENDER: { name: "ممدد الوقت التكتيكي (Time Extender)", icon: "Hourglass", color: "#4A8DFF" },
+        SPEED_BOOSTER: { name: "معزز السرعة المزدوج (Speed Challenge)", icon: "Zap", color: "#8B72F8" },
+        HAMMER: { name: "مطرقة الحظر التكتيكية (Hammer)", icon: "Hammer", color: "#EC4899" },
+        SHIELD_DEFENSE: { name: "درع الصمود التكتيكي (Shield Defense)", icon: "Shield", color: "#10B981" },
+      };
+      const meta = defaultNames[toolKey] || { name: `أداة تكتيكية (${toolKey})`, icon: "Sparkles", color: "#21D4D8" };
+
+      toolDef = await prisma.toolDefinition.create({
+        data: {
+          tenantId,
+          key: toolKey,
+          name: meta.name,
+          icon: meta.icon,
+          colorHex: meta.color,
+          defaultHours: 120,
+          isActive: true,
+        },
+      });
     }
 
     // 2. Prevent duplicate grants from the same source event
@@ -151,7 +171,7 @@ export class SmartInventoryService {
     const in6h = new Date(now.getTime() + 6 * 60 * 60 * 1000);
 
     // 1. Mark expired
-    await prisma.toolGrant.updateMany({
+    const expiredRes = await prisma.toolGrant.updateMany({
       where: {
         tenantId,
         expiresAt: { lte: now },
@@ -163,7 +183,7 @@ export class SmartInventoryService {
     });
 
     // 2. Mark expiring soon
-    await prisma.toolGrant.updateMany({
+    const expiringSoonRes = await prisma.toolGrant.updateMany({
       where: {
         tenantId,
         expiresAt: { lte: in48h, gt: now },
@@ -173,6 +193,11 @@ export class SmartInventoryService {
         status: "EXPIRING_SOON",
       },
     });
+
+    return {
+      expiredCount: expiredRes.count,
+      expiringSoonCount: expiringSoonRes.count,
+    };
   }
 
   /**

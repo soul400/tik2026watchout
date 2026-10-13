@@ -1,6 +1,8 @@
 import { RealTikTokConnectorAdapter } from "../lib/tiktok-adapter";
 import { LiveEventPipeline } from "../lib/event-pipeline";
 import { prisma } from "../lib/prisma";
+import { SmartInventoryService } from "../lib/smart-inventory";
+import { BattleScoreResolver } from "../lib/battle-score-resolver";
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -104,6 +106,13 @@ async function runWorker() {
       activeSessionId = null;
       activePipeline = null;
     }
+
+    // Close any dangling battles and reset score resolver
+    await prisma.battle.updateMany({
+      where: { tenantId: tenant.id, status: "IN_PROGRESS" },
+      data: { status: "COMPLETED", endedAt: new Date() },
+    }).catch(() => {});
+    BattleScoreResolver.resetBattleTracking();
   });
 
   adapter.on("disconnected", () => {
@@ -116,9 +125,16 @@ async function runWorker() {
 
   // Main supervision loop
   console.log(`[Worker] Starting live monitor for @${targetUsername}...`);
+  let lastReconcileTime = 0;
 
   while (true) {
     try {
+      // Reconcile tool expirations periodically (every 60s)
+      if (Date.now() - lastReconcileTime > 60000) {
+        lastReconcileTime = Date.now();
+        await SmartInventoryService.reconcileExpirations(tenant.id).catch(() => {});
+      }
+
       const isLive = await adapter.checkIsLive(targetUsername);
 
       if (isLive) {
@@ -127,6 +143,10 @@ async function runWorker() {
         if (connected) {
           // Wait while connected
           while (adapter.isConnected()) {
+            if (Date.now() - lastReconcileTime > 60000) {
+              lastReconcileTime = Date.now();
+              await SmartInventoryService.reconcileExpirations(tenant.id).catch(() => {});
+            }
             await sleep(3000);
           }
           console.log(`[Worker] Session finished. Resuming monitor...`);

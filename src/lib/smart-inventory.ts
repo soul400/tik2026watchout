@@ -205,12 +205,12 @@ export class SmartInventoryService {
    * Fetches accurate inventory counters per tool type.
    */
   static async getInventoryCounters(tenantId: string): Promise<InventoryOverview[]> {
-    await this.reconcileExpirations(tenantId);
-
     const toolDefs = await prisma.toolDefinition.findMany({
       where: { tenantId, isActive: true },
     });
 
+    const now = Date.now();
+    const in48h = now + 48 * 60 * 60 * 1000;
     const results: InventoryOverview[] = [];
 
     for (const def of toolDefs) {
@@ -228,12 +228,14 @@ export class SmartInventoryService {
         totalReceived += g.quantityGranted;
         totalConsumed += g.quantityConsumed;
         const remaining = Math.max(0, g.quantityGranted - g.quantityConsumed);
+        const expiresAtMs = g.expiresAt.getTime();
+        const isExpired = expiresAtMs <= now || g.status === "EXPIRED";
 
-        if (g.status === "EXPIRED") {
+        if (isExpired) {
           totalExpired += remaining;
         } else {
           totalAvailable += remaining;
-          if (g.status === "EXPIRING_SOON") {
+          if (expiresAtMs <= in48h || g.status === "EXPIRING_SOON") {
             totalExpiringSoon += remaining;
           }
         }

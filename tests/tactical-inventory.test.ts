@@ -16,8 +16,10 @@ describe("Tactical Inventory & Multi-Tool Tracking Tests", () => {
     await prisma.toolGrant.deleteMany({ where: { tenantId: TEST_TENANT_ID } });
     await prisma.toolDefinition.deleteMany({ where: { tenantId: TEST_TENANT_ID } });
     await prisma.supporter.deleteMany({ where: { tenantId: TEST_TENANT_ID } });
+    await prisma.battleParticipant.deleteMany({ where: { battle: { tenantId: TEST_TENANT_ID } } });
     await prisma.battle.deleteMany({ where: { tenantId: TEST_TENANT_ID } });
     await prisma.liveSession.deleteMany({ where: { tenantId: TEST_TENANT_ID } });
+    await prisma.streamerAccount.deleteMany({ where: { tenantId: TEST_TENANT_ID } });
     await prisma.tenant.deleteMany({ where: { id: TEST_TENANT_ID } });
 
     await prisma.tenant.create({
@@ -51,6 +53,16 @@ describe("Tactical Inventory & Multi-Tool Tracking Tests", () => {
         liveSessionId: session.id,
         battleType: "1V1",
         status: "IN_PROGRESS",
+        participants: {
+          create: [
+            {
+              teamNumber: 1,
+              platformUserId: "test_anchor_p1",
+              username: "anchor1",
+              displayName: "مضيف التحدي",
+            },
+          ],
+        },
       },
     });
   });
@@ -61,6 +73,7 @@ describe("Tactical Inventory & Multi-Tool Tracking Tests", () => {
     await prisma.toolGrant.deleteMany({ where: { tenantId: TEST_TENANT_ID } });
     await prisma.toolDefinition.deleteMany({ where: { tenantId: TEST_TENANT_ID } });
     await prisma.supporter.deleteMany({ where: { tenantId: TEST_TENANT_ID } });
+    await prisma.battleParticipant.deleteMany({ where: { battle: { tenantId: TEST_TENANT_ID } } });
     await prisma.battle.deleteMany({ where: { tenantId: TEST_TENANT_ID } });
     await prisma.liveSession.deleteMany({ where: { tenantId: TEST_TENANT_ID } });
     await prisma.streamerAccount.deleteMany({ where: { tenantId: TEST_TENANT_ID } });

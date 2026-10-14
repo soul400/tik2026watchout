@@ -43,6 +43,7 @@ export class SmartInventoryService {
       const defaultNames: Record<string, { name: string; icon: string; color: string }> = {
         GLOVE: { name: "القفاز التكتيكي (Glove x5)", icon: "ShieldAlert", color: "#F5B942" },
         BOOST_FOG: { name: "الضباب المعزز (Boost Fog)", icon: "CloudFog", color: "#21D4D8" },
+        SONG_SURGE: { name: "موجة الأغنية التكتيكية (Song Surge x5)", icon: "Mic2", color: "#A855F7" },
         TIME_EXTENDER: { name: "ممدد الوقت التكتيكي (Time Extender)", icon: "Hourglass", color: "#4A8DFF" },
         SPEED_BOOSTER: { name: "معزز السرعة المزدوج (Speed Challenge)", icon: "Zap", color: "#8B72F8" },
         HAMMER: { name: "مطرقة الحظر التكتيكية (Hammer)", icon: "Hammer", color: "#EC4899" },

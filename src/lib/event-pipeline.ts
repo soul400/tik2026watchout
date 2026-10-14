@@ -670,10 +670,58 @@ export class LiveEventPipeline {
 
       const { SmartInventoryService } = await import("./smart-inventory");
 
+      // Helper to classify tool type from raw strings and message types
+      const resolveToolKey = (rawStr: string, msgType?: number): string => {
+        const s = (rawStr || "").toLowerCase();
+        if (s.includes("wave") || s.includes("song") || s.includes("surge") || s.includes("sing") || msgType === 8) {
+          return "SONG_SURGE";
+        }
+        if (s.includes("fog") || s.includes("smoke") || s.includes("mist") || msgType === 3) {
+          return "BOOST_FOG";
+        }
+        if (s.includes("time") || s.includes("timer") || s.includes("extender") || msgType === 5) {
+          return "TIME_EXTENDER";
+        }
+        if (s.includes("hammer") || s.includes("stun") || s.includes("special_effect") || msgType === 6 || msgType === 9) {
+          return "HAMMER";
+        }
+        if (s.includes("speed") || s.includes("challenge") || s.includes("booster")) {
+          return "SPEED_BOOSTER";
+        }
+        if (s.includes("shield") || s.includes("defense") || s.includes("protect")) {
+          return "SHIELD_DEFENSE";
+        }
+        if (s.includes("glove") || s.includes("critical") || s.includes("vault") || msgType === 2 || msgType === 12) {
+          return "GLOVE";
+        }
+        return "GLOVE"; // Default standard power-up
+      };
+
       // 1. Check AwardCardNotice (Tools awarded at the end or during battle)
       if (data.awardCardNotice) {
+        // Collect all potential card metadata strings for accurate detection
+        const rawMetaPieces: string[] = [
+          data.awardCardNotice?.cardType,
+          data.awardCardNotice?.cardName,
+          data.awardCardNotice?.toolKey,
+          data.awardCardNotice?.displayContent?.key,
+          data.awardCardNotice?.displayContent?.defaultPattern,
+          data.cardObtainGuide?.cardName,
+          data.cardObtainGuide?.toolKey,
+        ];
+
+        if (Array.isArray(data.awardCardNotice?.displayContent?.pieces)) {
+          for (const piece of data.awardCardNotice.displayContent.pieces) {
+            if (piece?.stringValue) rawMetaPieces.push(piece.stringValue);
+            if (piece?.patternRef?.key) rawMetaPieces.push(piece.patternRef.key);
+          }
+        }
+
+        const globalToolKey = resolveToolKey(rawMetaPieces.filter(Boolean).join(" "), data.msgType);
         const awardedUsers = data.awardCardNotice.awardedUsers || [];
-        for (const userInfo of awardedUsers) {
+
+        for (let idx = 0; idx < awardedUsers.length; idx++) {
+          const userInfo = awardedUsers[idx];
           const user = userInfo.user || userInfo;
           const uid = String(user.userId || user.displayId || "");
           const uname = String(user.displayId || user.nickName || "supporter");
@@ -701,41 +749,35 @@ export class LiveEventPipeline {
               },
             });
 
-            // Detect tool key from notice data or fallback to GLOVE
-            let toolKey = "GLOVE";
-            const rawCardType = String(
-              data.awardCardNotice?.cardType ||
-              data.awardCardNotice?.cardName ||
-              data.awardCardNotice?.toolKey ||
-              ""
-            ).toLowerCase();
+            // Per-user card info if present (supports mixed awards in one notice)
+            const userCardInfo = String(userInfo.cardType || userInfo.cardName || userInfo.toolKey || "");
+            const userToolKey = userCardInfo ? resolveToolKey(userCardInfo) : globalToolKey;
 
-            if (rawCardType.includes("fog") || rawCardType.includes("smoke") || rawCardType === "2") {
-              toolKey = "BOOST_FOG";
-            } else if (rawCardType.includes("time") || rawCardType === "3") {
-              toolKey = "TIME_EXTENDER";
-            } else if (rawCardType.includes("speed") || rawCardType === "4") {
-              toolKey = "SPEED_BOOSTER";
-            } else if (rawCardType.includes("hammer") || rawCardType === "5") {
-              toolKey = "HAMMER";
-            } else if (rawCardType.includes("shield") || rawCardType === "6") {
-              toolKey = "SHIELD_DEFENSE";
-            }
+            // Extract quantity (supports multi-quantity tool grants)
+            const quantity = Number(
+              userInfo.count ||
+              userInfo.quantity ||
+              userInfo.cardNum ||
+              userInfo.cardCount ||
+              userInfo.num ||
+              data.awardCardNotice?.count ||
+              1
+            ) || 1;
 
-            // Derive deterministic dedupKey to prevent duplicate awards on network replay
-            const noticeId = data.awardCardNotice?.noticeId || data.common?.msgId || data.msgId;
-            const dedupKey = noticeId
-              ? `card_${targetBattleId || "live"}_${uid}_${noticeId}`
-              : `card_${targetBattleId || "live"}_${uid}_${data.awardCardNotice?.awardSeq || "single"}`;
+            // Deterministic deduplication key incorporating battle, user, tool, notice, and index
+            // Ensures multiple different tools awarded to same supporter are both granted,
+            // while guarding against network replays of the exact same event.
+            const noticeId = data.awardCardNotice?.noticeId || data.common?.msgId || data.msgId || "award";
+            const dedupKey = `card_${targetBattleId || "live"}_${uid}_${userToolKey}_${noticeId}_${idx}`;
 
             await SmartInventoryService.grantTool({
               tenantId: this.tenantId,
               supporterId: supporter.id,
-              toolKey,
-              quantity: 1,
+              toolKey: userToolKey,
+              quantity,
               battleId: targetBattleId || undefined,
               sourceEventId: dedupKey,
-              auditReference: `TikTok Battle Item Card Award (Battle: ${targetBattleId || "live"})`,
+              auditReference: `TikTok Battle Item Card Award (${userToolKey} x${quantity}, Battle: ${targetBattleId || "live"})`,
             }).catch(() => {});
           }
         }
@@ -749,11 +791,23 @@ export class LiveEventPipeline {
         consumedToolKey = "GLOVE"; // Critical Strike = القفاز x5
         targetUser = data.useCriticalStrikeCard.cardInfo?.sendUser;
       } else if (data.useSmokeCard) {
-        consumedToolKey = "BOOST_FOG"; // Smoke Card = الضباب
+        consumedToolKey = "BOOST_FOG"; // Smoke Card = الضباب المعزز (Magic Mist)
         targetUser = data.useSmokeCard.cardInfo?.sendUser;
       } else if (data.useExtraTimeCard) {
-        consumedToolKey = "TIME_EXTENDER"; // Extra Time = ممدد الوقت
+        consumedToolKey = "TIME_EXTENDER"; // Extra Time = ممدد الوقت (+10s)
         targetUser = data.useExtraTimeCard.cardInfo?.sendUser;
+      } else if (data.useWaveCard) {
+        consumedToolKey = "SONG_SURGE"; // Wave Card = موجة الأغنية التكتيكية (Song Surge x5)
+        targetUser = data.useWaveCard.cardInfo?.sendUser;
+      } else if (data.useSpecialEffectCard) {
+        consumedToolKey = "HAMMER"; // Special Effect Card = مطرقة الحظر/التعطيل (Victory Hammer / Stun)
+        targetUser = data.useSpecialEffectCard.cardInfo?.sendUser;
+      } else if (data.specialEffectNotice) {
+        consumedToolKey = "HAMMER";
+        targetUser = data.specialEffectNotice.fromUserId ? { userId: data.specialEffectNotice.fromUserId } : null;
+      } else if (data.useVaultGloveCard) {
+        consumedToolKey = "GLOVE";
+        targetUser = data.useVaultGloveCard.cardInfo?.sendUser;
       }
 
       if (consumedToolKey && targetUser) {

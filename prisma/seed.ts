@@ -63,50 +63,58 @@ async function main() {
   const tools = [
     {
       key: "GLOVE",
-      name: "القفاز التكتيكي (Glove x5)",
-      description: "يضاعف نقاط الهدايا التكتيكية أثناء جولات النزال الحاسمة بفرصة x5 مع تأثير ضربة قاضية",
+      name: "القفاز المعزز (Boosting Glove x5)",
+      description: "نافذة 30 ثانية تمنح الهدايا فرصة تصل إلى 30% لمضاعفة النقاط ×5 أثناء المعركة",
       icon: "ShieldAlert",
       colorHex: "#F5B942", // Gold
       defaultHours: 120, // 5 days
     },
     {
+      key: "SONG_SURGE",
+      name: "موجة الغناء (Song Surge)",
+      description: "أداة تفاعلية تمنح المضيف 30 ثانية لبدء الغناء وتفعيل فرصة 30% لمضاعفة نقاط الهدايا ×5",
+      icon: "Mic2",
+      colorHex: "#A855F7", // Purple/Violet
+      defaultHours: 120,
+    },
+    {
       key: "BOOST_FOG",
-      name: "الضباب المعزز (Boost Fog)",
-      description: "يحجب نقاط الفريق الداعم عن المنافسين لإرباك الحسابات في الثواني الأخيرة من النزال",
+      name: "الضباب السحري (Magic Mist)",
+      description: "يُنشر في آخر 30 ثانية من الجولة لحجب سكور الهدايا وإرباك حسابات المنافس",
       icon: "CloudFog",
       colorHex: "#21D4D8", // Turquoise
       defaultHours: 120,
     },
     {
       key: "TIME_EXTENDER",
-      name: "ممدد الوقت التكتيكي (Time Extender)",
-      description: "يضيف وقتاً إضافياً للجولة لتمكين الداعمين من قلب النتيجة وتجاوز فريق الخصم",
+      name: "ممدد الوقت +10ث (Timer Extender)",
+      description: "يُستخدم في الثواني الأخيرة لتمديد وقت الجولة ومنح الفريق فرصة حسم إضافية",
       icon: "Hourglass",
-      colorHex: "#4A8DFF", // Blue
-      defaultHours: 120,
-    },
-    {
-      key: "SPEED_BOOSTER",
-      name: "معزز السرعة المزدوج (Speed Challenge)",
-      description: "يضاعف سرعة احتساب النقاط التكبيس والهدايا x2 أو x3 في فترات السرعة الخاطفة",
-      icon: "Zap",
-      colorHex: "#8B72F8", // Purple
+      colorHex: "#3B82F6", // Blue
       defaultHours: 120,
     },
     {
       key: "HAMMER",
-      name: "مطرقة الحظر التكتيكية (Hammer)",
-      description: "أداة تعطل مؤقتاً إحدى أدوات الخصم الدفاعية أو تقلل من وتيرة تدفق نقاط الهجوم",
+      name: "مطرقة النصر والتجميد (Victory Hammer)",
+      description: "تُستخدم أثناء فترة الاحتفال بالنصر لتجميد وتعطيل تفاعل المنافس",
       icon: "Hammer",
-      colorHex: "#F06464", // Red
+      colorHex: "#EC4899", // Pink
+      defaultHours: 120,
+    },
+    {
+      key: "SPEED_BOOSTER",
+      name: "معزز السرعة (Speed Challenge)",
+      description: "يضاعف سرعة احتساب نقاط التكبيس والهدايا في فترات السرعة الخاطفة",
+      icon: "Zap",
+      colorHex: "#8B72F8", // Violet
       defaultHours: 120,
     },
     {
       key: "SHIELD_DEFENSE",
-      name: "درع الصمود الدفاعي (Shield)",
+      name: "درع الصمود التكتيكي (Shield Defense)",
       description: "يمتص ضربات الخصم المفاجئة ويحمي تقدم النقاط لفترة زمنية محددة",
       icon: "Shield",
-      colorHex: "#26C281", // Green
+      colorHex: "#10B981", // Emerald
       defaultHours: 120,
     },
   ];

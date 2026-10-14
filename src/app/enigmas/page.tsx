@@ -5,6 +5,15 @@ import { EyeOff, AlertCircle, CheckCircle, HelpCircle, Shield } from "lucide-rea
 export const dynamic = "force-dynamic";
 
 export default async function EnigmasPage() {
+  const tenant = await prisma.tenant.findUnique({
+    where: { slug: "mohra-live" },
+  });
+  const tenantId = tenant?.id || "";
+
+  const reviews = await prisma.enigmaReview.findMany({
+    where: { tenantId, status: "PENDING" },
+  });
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -29,34 +38,43 @@ export default async function EnigmasPage() {
 
       {/* Candidates List */}
       <div className="bg-surface rounded-xl border border-white/5 p-6">
-        <h3 className="text-base font-semibold text-white mb-4">مرشحو المطابقة قيد المراجعة</h3>
-
-        <div className="bg-elevated p-4 rounded-xl border border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-full bg-surface border border-turquoise/30 flex items-center justify-center font-bold text-turquoise">
-              ف
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-white text-sm">فـيصل الشمري ⭐</span>
-                <span className="text-secondaryText text-xs">مع</span>
-                <span className="font-bold text-white text-sm">Faisal_Alt</span>
-              </div>
-              <p className="text-xs text-secondaryText mt-0.5">
-                تطابق في معرف المنصة الثابت (SecUid Hash) ونمط الحضور المتطابق في 3 نزالات متتالية
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <span className="px-2.5 py-1 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-semibold">
-              تطابق قوي (Strong Match)
-            </span>
-            <button className="px-3 py-1.5 rounded-lg bg-surface border border-white/10 hover:bg-white/10 text-white text-xs font-medium">
-              تأكيد الربط يدوياً
-            </button>
-          </div>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-semibold text-white">مرشحو المطابقة قيد المراجعة</h3>
+          <span className="text-xs font-mono text-secondaryText">
+            الحالات النشطة: {reviews.length}
+          </span>
         </div>
+
+        {reviews.length === 0 ? (
+          <div className="py-12 text-center text-secondaryText border border-dashed border-white/10 rounded-xl">
+            <HelpCircle className="w-10 h-10 mx-auto mb-3 text-secondaryText/40" />
+            <p className="text-base font-bold text-white">لا توجد حالات تطابق مشبوهة قيد المراجعة حالياً</p>
+            <p className="text-xs font-mono mt-1 text-secondaryText max-w-md mx-auto">
+              يقوم محرك الرصد الذكي بتحليل أنماط التواجد وتغيرات المعرفات تلقائياً عند رصد أي حسابات متزامنة في البث المباشر
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {reviews.map((review) => (
+              <div
+                key={review.id}
+                className="bg-elevated p-4 rounded-xl border border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-4"
+              >
+                <div>
+                  <span className="text-sm font-bold text-white">مرشح فحص هوية رقم #{review.id.slice(-6)}</span>
+                  <p className="text-xs text-secondaryText mt-0.5 font-mono">
+                    درجة الثقة التقنية: {(review.confidenceScore * 100).toFixed(0)}%
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="px-2.5 py-1 rounded bg-turquoise/10 text-turquoise border border-turquoise/20 text-xs font-semibold">
+                    {review.matchLevel}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

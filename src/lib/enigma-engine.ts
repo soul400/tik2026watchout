@@ -30,8 +30,9 @@ export interface EnigmaCandidate {
 
 export class EnigmaEngine {
   /**
-   * Analyzes all raw events and supporters to detect supporters
-   * who used TikTok Enigma mask / incognito gifting and matches them to known profiles.
+   * Analyzes raw events and supporters to detect supporters
+   * who TRULY activated TikTok Enigma mask / incognito mode,
+   * strictly excluding any regular users who merely mentioned or chatted with Enigmas.
    */
   static async analyzeAndSyncEnigmaReviews(tenantId: string): Promise<number> {
     // 1. Fetch all supporters indexed by platformUserId
@@ -44,7 +45,7 @@ export class EnigmaEngine {
       supporterMap.set(s.platformUserId, s);
     }
 
-    // 2. Fetch all raw events with isEnigmaMaskOn: true
+    // 2. Fetch raw events with isEnigmaMaskOn: true
     const enigmaEvents = await prisma.$queryRawUnsafe<any[]>(`
       SELECT id, sourceTimestamp, payload 
       FROM RawEvent 
@@ -56,7 +57,7 @@ export class EnigmaEngine {
       return 0;
     }
 
-    // Group events by UID / SecUID
+    // Group events ONLY for users who themselves had Enigma mask ON or an Enigma displayId
     interface EnigmaGroup {
       uid: string;
       secUid: string;
@@ -68,11 +69,21 @@ export class EnigmaEngine {
     }
 
     const enigmaGroups = new Map<string, EnigmaGroup>();
+    const isEnigmaName = (name: string) => (name || "").toLowerCase().startsWith("enigma");
 
     for (const ev of enigmaEvents) {
       try {
         const p = JSON.parse(ev.payload);
         const u = p.user || {};
+        const isMaskOn = u.enigmaInfo?.isEnigmaMaskOn === true;
+        const hasEnigmaName = isEnigmaName(u.displayId);
+
+        // STRICT FILTER: If the user themselves did not put on an Enigma mask and doesn't have an Enigma name,
+        // DO NOT INCLUDE THEM (they are just normal chatters mentioning an Enigma)
+        if (!isMaskOn && !hasEnigmaName) {
+          continue;
+        }
+
         const uid = String(u.id || "");
         const secUid = String(u.secUid || "");
         const key = uid || secUid;
@@ -93,6 +104,12 @@ export class EnigmaEngine {
         const item = enigmaGroups.get(key)!;
         item.eventsCount++;
 
+        // Keep the best Enigma name seen
+        if (hasEnigmaName && !isEnigmaName(item.displayId)) {
+          item.displayId = u.displayId;
+          item.nickname = u.nickname || u.displayId;
+        }
+
         if (p.gift || p.giftName) {
           const count = Number(p.repeatCount || 1);
           const dia = Number(p.diamondCount || p.gift?.diamondCount || 0) * count;
@@ -107,9 +124,22 @@ export class EnigmaEngine {
       } catch {}
     }
 
-    // 3. Correlate with public supporters
+    if (enigmaGroups.size === 0) {
+      return 0;
+    }
+
+    // Clean previous records to remove any mistakenly recorded regular chatters
+    await prisma.enigmaReview.deleteMany({
+      where: { tenantId },
+    });
+
+    // Known persistent mappings discovered from historical events
+    const KNOWN_MAP: Record<string, { username: string; displayName: string }> = {
+      "7619854442507240469": { username: "cold.killer85", displayName: "Cold killer💀" },
+      "7195697828512646150": { username: "rrmmh09", displayName: "RM7" },
+    };
+
     let syncedCount = 0;
-    const isEnigmaName = (name: string) => (name || "").toLowerCase().startsWith("enigma");
 
     for (const [key, enigma] of enigmaGroups) {
       // Find supporter in DB
@@ -132,19 +162,15 @@ export class EnigmaEngine {
       }
 
       // Check if real identity is known
-      let realSupporter = supp;
-      let realUsername = !isEnigmaName(supp.username) ? supp.username : "";
-      let realDisplayName = !isEnigmaName(supp.displayName) ? supp.displayName : "";
+      let realUsername = "";
+      let realDisplayName = "";
 
-      // If supporter username in table is an Enigma alias, check if we know their true username (like @rrmmh09 for RMM77)
-      if (!realUsername) {
-        if (enigma.uid === "7195697828512646150") {
-          realUsername = "rrmmh09";
-          realDisplayName = "RM7";
-        } else if (enigma.uid === "7619854442507240469") {
-          realUsername = "cold.killer85";
-          realDisplayName = "Cold killer💀";
-        }
+      if (KNOWN_MAP[enigma.uid]) {
+        realUsername = KNOWN_MAP[enigma.uid].username;
+        realDisplayName = KNOWN_MAP[enigma.uid].displayName;
+      } else if (!isEnigmaName(supp.username)) {
+        realUsername = supp.username;
+        realDisplayName = supp.displayName;
       }
 
       const isDirectMatch = !!realUsername && realUsername !== enigma.displayId;
@@ -155,10 +181,11 @@ export class EnigmaEngine {
       if (isDirectMatch) {
         evidencePoints.push("تطابق تقني قطعي في المعرف الثابت الموحد (Persistent UID / SecUID).");
         evidencePoints.push(
-          `رصد الداعم بالبث بصفته الحقيقية (@${realUsername}) وأيضاً تحت وضع القناع (@${enigma.displayId}).`
+          `رصد الداعم بالبث بصفته الحقيقية (@${realUsername}) وتأكد تفعيله لوضع القناع باسم (@${enigma.displayId}).`
         );
       } else {
-        evidencePoints.push("استخدام قناع الحساب الغامض (Enigma Mask) مع إخفاء الهوية في البث.");
+        evidencePoints.push("تفعيل قناع الحساب الغامض (Enigma Mask) مع حجب الهوية الرسمية بالبث.");
+        evidencePoints.push("الحساب دخل البث حصرياً بصفته الغامضة ولم يُرصد له نشاط علني سابق.");
       }
 
       if (enigma.diamonds > 0) {
@@ -175,33 +202,25 @@ export class EnigmaEngine {
       }
 
       const evidence: EnigmaEvidence = {
-        realUsername: realUsername || enigma.displayId,
+        realUsername: realUsername || "حساب غامض حصري",
         realDisplayName: realDisplayName || enigma.nickname,
         enigmaUsername: enigma.displayId,
         enigmaDisplayName: enigma.nickname,
         platformUserId: enigma.uid,
         secUid: enigma.secUid || undefined,
         diamondsWithEnigma: enigma.diamonds,
-        diamondsPublic: realSupporter.totalDiamonds,
-        totalCombinedDiamonds: enigma.diamonds + (isDirectMatch ? realSupporter.totalDiamonds : 0),
+        diamondsPublic: isDirectMatch ? supp.totalDiamonds : 0,
+        totalCombinedDiamonds: enigma.diamonds + (isDirectMatch ? supp.totalDiamonds : 0),
         enigmaEventsCount: enigma.eventsCount,
         topGifts: enigma.gifts.slice(0, 10),
         evidencePoints,
       };
 
-      // Unique pairing key
-      const supporter1Id = supp.id; // Enigma profile
-      const supporter2Id = realSupporter.id; // True identity profile
+      const supporter1Id = supp.id;
+      const supporter2Id = supp.id;
 
-      await prisma.enigmaReview.upsert({
-        where: {
-          tenantId_supporter1Id_supporter2Id: {
-            tenantId,
-            supporter1Id,
-            supporter2Id,
-          },
-        },
-        create: {
+      await prisma.enigmaReview.create({
+        data: {
           tenantId,
           supporter1Id,
           supporter2Id,
@@ -209,11 +228,6 @@ export class EnigmaEngine {
           confidenceScore,
           evidenceJson: JSON.stringify(evidence),
           status: "PENDING",
-        },
-        update: {
-          matchLevel,
-          confidenceScore,
-          evidenceJson: JSON.stringify(evidence),
         },
       });
 

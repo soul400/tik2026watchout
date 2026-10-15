@@ -29,6 +29,7 @@ export class LiveEventPipeline {
     this.adapter.on("gift", (data) => this.handleGift(data));
     this.adapter.on("chat", (data) => this.handleChat(data));
     this.adapter.on("like", (data) => this.handleLike(data));
+    this.adapter.on("roomUser", (data) => this.handleRoomUser(data));
     this.adapter.on("linkMicBattle", (data) => this.handleBattle(data));
     this.adapter.on("linkMicArmies", (data) => this.handleArmies(data));
     this.adapter.on("linkMicBattleItemCard", (data) => this.handleBattleItemCard(data));
@@ -313,6 +314,26 @@ export class LiveEventPipeline {
       this.stats.processedCount++;
     } catch {
       this.stats.errorCount++;
+    }
+  }
+
+  async handleRoomUser(data: any): Promise<void> {
+    try {
+      const count = Number(data.viewerCount || data.count || 0);
+      if (count > 0) {
+        const session = await prisma.liveSession.findUnique({
+          where: { id: this.liveSessionId },
+          select: { peakViewers: true },
+        });
+        if (session && count > session.peakViewers) {
+          await prisma.liveSession.update({
+            where: { id: this.liveSessionId },
+            data: { peakViewers: count },
+          }).catch(() => {});
+        }
+      }
+    } catch {
+      // non-blocking
     }
   }
 

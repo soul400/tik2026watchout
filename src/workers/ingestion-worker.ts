@@ -3,6 +3,7 @@ import { LiveEventPipeline } from "../lib/event-pipeline";
 import { prisma } from "../lib/prisma";
 import { SmartInventoryService } from "../lib/smart-inventory";
 import { BattleScoreResolver } from "../lib/battle-score-resolver";
+import { STQIEngine } from "../lib/stqi-engine";
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -37,6 +38,14 @@ async function runWorker() {
     where: { tenantId: tenant.id, status: "LIVE" },
     data: { status: "ENDED", endedAt: new Date() },
   });
+
+  // Synchronize STQI Analytics on worker startup
+  try {
+    const synced = await STQIEngine.syncHourlyAnalytics(tenant.id);
+    console.log(`[Worker] 📊 STQI Analytics synchronized (${synced} hourly records).`);
+  } catch (err: any) {
+    console.warn(`[Worker] ⚠️ STQI initial sync notice: ${err?.message || err}`);
+  }
 
   const adapter = new RealTikTokConnectorAdapter({
     enableExtendedGiftInfo: false,
@@ -127,6 +136,12 @@ async function runWorker() {
       data: { status: "COMPLETED", endedAt: new Date() },
     }).catch(() => {});
     BattleScoreResolver.resetBattleTracking();
+
+    // Recompute STQI after session ends
+    try {
+      const synced = await STQIEngine.syncHourlyAnalytics(tenant.id);
+      console.log(`[Worker] 📊 STQI Analytics synchronized after stream end (${synced} records).`);
+    } catch {}
   });
 
   adapter.on("disconnected", () => {
@@ -140,6 +155,7 @@ async function runWorker() {
   // Main supervision loop
   console.log(`[Worker] Starting live monitor for @${targetUsername}...`);
   let lastReconcileTime = 0;
+  let lastStqiSyncTime = Date.now();
 
   while (true) {
     try {
@@ -147,6 +163,12 @@ async function runWorker() {
       if (Date.now() - lastReconcileTime > 60000) {
         lastReconcileTime = Date.now();
         await SmartInventoryService.reconcileExpirations(tenant.id).catch(() => {});
+      }
+
+      // Re-sync STQI metrics periodically (every 10 minutes)
+      if (Date.now() - lastStqiSyncTime > 10 * 60 * 1000) {
+        lastStqiSyncTime = Date.now();
+        await STQIEngine.syncHourlyAnalytics(tenant.id).catch(() => {});
       }
 
       const isLive = await adapter.checkIsLive(targetUsername);
@@ -160,6 +182,10 @@ async function runWorker() {
             if (Date.now() - lastReconcileTime > 60000) {
               lastReconcileTime = Date.now();
               await SmartInventoryService.reconcileExpirations(tenant.id).catch(() => {});
+            }
+            if (Date.now() - lastStqiSyncTime > 10 * 60 * 1000) {
+              lastStqiSyncTime = Date.now();
+              await STQIEngine.syncHourlyAnalytics(tenant.id).catch(() => {});
             }
             await sleep(3000);
           }

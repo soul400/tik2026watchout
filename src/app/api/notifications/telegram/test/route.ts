@@ -33,7 +33,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "discover_chat_id") {
-      const targetUsername = body.targetUsername || "mem121212";
+      const targetUsername = body.targetUsername || "Blacksoul_8";
       const res = await TelegramService.resolveChatIdFromUpdates(tenant.id, targetUsername, botToken);
       return NextResponse.json({
         success: res.success,

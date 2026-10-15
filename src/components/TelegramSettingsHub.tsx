@@ -66,6 +66,8 @@ export function TelegramSettingsHub() {
     null
   );
   const [showToken, setShowToken] = useState(false);
+  const [targetTelegramUsername, setTargetTelegramUsername] = useState("Blacksoul_8");
+  const [showGuide, setShowGuide] = useState(true);
 
   // Form state
   const [botToken, setBotToken] = useState("");
@@ -343,20 +345,33 @@ export function TelegramSettingsHub() {
             </p>
           </div>
 
-          {/* Quick Connect for @mem121212 */}
-          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-turquoise/10 via-background to-background border border-turquoise/30 space-y-2.5">
+          {/* Quick Connect for @Blacksoul_8 */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-turquoise/10 via-background to-background border border-turquoise/30 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-white flex items-center gap-1.5">
                 <Send className="w-3.5 h-3.5 text-turquoise" />
-                الحساب المستهدف: <span className="text-turquoise font-mono">@mem121212</span>
+                الحساب المستهدف للربط:
               </span>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-turquoise/15 text-turquoise font-bold">
                 ربط تلقائي ذكي
               </span>
             </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-secondaryText font-mono font-bold">@</span>
+              <input
+                type="text"
+                value={targetTelegramUsername}
+                onChange={(e) => setTargetTelegramUsername(e.target.value.replace("@", "").trim())}
+                placeholder="Blacksoul_8"
+                className="w-full bg-elevated border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white placeholder-secondaryText/50 focus:outline-none focus:border-turquoise font-mono font-bold"
+              />
+            </div>
+
             <p className="text-[11px] text-secondaryText leading-relaxed">
-              لربط حسابك <strong>@mem121212</strong> فوراً: افتح البوت في تليقرام واضغط <strong>Start</strong>، ثم اضغط الزر أدناه لجلب معرفك الرقمي والربط تلقائياً!
+              لربط حسابك <strong>@{targetTelegramUsername}</strong>: افتح البوت في تليقرام واضغط <strong>Start</strong> أو أرسل أي كلمة، ثم اضغط الزر أدناه ليقوم النظام بالتقاط معرفك وربطه تلقائياً!
             </p>
+
             <button
               type="button"
               onClick={async () => {
@@ -372,7 +387,7 @@ export function TelegramSettingsHub() {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                       action: "discover_chat_id",
-                      targetUsername: "mem121212",
+                      targetUsername: targetTelegramUsername.trim() || "Blacksoul_8",
                       botToken: botToken.trim(),
                     }),
                   });
@@ -382,13 +397,13 @@ export function TelegramSettingsHub() {
                     setIsEnabled(true);
                     setFeedback({
                       type: "success",
-                      message: `تم العثور على المعرف الرقمي لحساب @mem121212 (${data.chatId}) وتفعيله بنجاح! يمكنك الآن تجربة الإرسال.`,
+                      message: `تم العثور على المعرف الرقمي لحساب @${targetTelegramUsername} (${data.chatId}) وتفعيله بنجاح! يمكنك الآن تجربة الإرسال.`,
                     });
                     setTimeout(fetchData, 800);
                   } else {
                     setFeedback({
                       type: "error",
-                      message: data.error || "تعذر العثور على محادثة من @mem121212 في البوت بعد.",
+                      message: data.error || `تعذر العثور على محادثة من @${targetTelegramUsername} في البوت بعد.`,
                     });
                   }
                 } catch {
@@ -398,20 +413,65 @@ export function TelegramSettingsHub() {
                 }
               }}
               disabled={testingAction === "discover_chat_id" || !botToken.trim()}
-              className="w-full py-2 rounded-xl bg-turquoise/20 hover:bg-turquoise/30 border border-turquoise/40 text-turquoise text-xs font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-40"
+              className="w-full py-2.5 rounded-xl bg-turquoise/20 hover:bg-turquoise/30 border border-turquoise/40 text-turquoise text-xs font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-40 shadow-sm"
             >
               {testingAction === "discover_chat_id" ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>جاري البحث عن @mem121212 في البوت...</span>
+                  <span>جاري البحث عن @{targetTelegramUsername} في البوت...</span>
                 </>
               ) : (
                 <>
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>⚡ جلب المعرف وربط @mem121212 تلقائياً</span>
+                  <span>⚡ جلب المعرف وربط @{targetTelegramUsername} تلقائياً</span>
                 </>
               )}
             </button>
+          </div>
+
+          {/* Collapsible 3-Step Guide */}
+          <div className="bg-elevated/60 p-3.5 rounded-2xl border border-white/5 space-y-2 text-xs">
+            <button
+              type="button"
+              onClick={() => setShowGuide(!showGuide)}
+              className="w-full flex items-center justify-between text-secondaryText hover:text-white font-bold transition-colors"
+            >
+              <span className="flex items-center gap-1.5 text-gold">
+                <span>📖</span> كيف أربط الموقع بالتليقرام؟ (دليل الـ 30 ثانية)
+              </span>
+              <span className="text-[10px] text-turquoise">{showGuide ? "إخفاء" : "عرض الشرح"}</span>
+            </button>
+
+            {showGuide && (
+              <div className="space-y-2 pt-2 border-t border-white/5 text-[11px] text-secondaryText leading-relaxed">
+                <div className="flex items-start gap-2">
+                  <div className="w-4 h-4 rounded-full bg-turquoise/20 text-turquoise flex items-center justify-center shrink-0 font-bold text-[10px] mt-0.5">
+                    1
+                  </div>
+                  <div>
+                    <strong className="text-white">إنشاء البوت:</strong> افتح تليقرام وابحث عن <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="text-turquoise underline font-bold">@BotFather</a>، أرسل له الأمر <code className="bg-black/50 px-1 rounded text-gold">/newbot</code>، واختر اسماً ومعرفاً للبوت، وانسخ الـ <strong>Token</strong> وضعه في الخانة بالأعلى.
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-2">
+                  <div className="w-4 h-4 rounded-full bg-turquoise/20 text-turquoise flex items-center justify-center shrink-0 font-bold text-[10px] mt-0.5">
+                    2
+                  </div>
+                  <div>
+                    <strong className="text-white">فتح البوت:</strong> ادخل على البوت الذي أنشأته بحسابك <span className="text-white font-mono font-bold">@Blacksoul_8</span> واضغط <strong className="text-white">Start</strong> أو أرسل كلمة "مرحبا".
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-2">
+                  <div className="w-4 h-4 rounded-full bg-turquoise/20 text-turquoise flex items-center justify-center shrink-0 font-bold text-[10px] mt-0.5">
+                    3
+                  </div>
+                  <div>
+                    <strong className="text-white">الربط التلقائي:</strong> اضغط على زر <strong className="text-turquoise">⚡ جلب المعرف وربط @Blacksoul_8 تلقائياً</strong> وسيتم الربط فوراً وتفعيل التنبيهات!
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Action Buttons */}

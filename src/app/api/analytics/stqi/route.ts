@@ -35,12 +35,14 @@ export async function GET(request: Request) {
     }
 
     const bestWindow = await STQIEngine.getBestStreamWindow(tenant.id);
+    const smartOverview = await STQIEngine.getSmartAnalyticsOverview(tenant.id);
 
     return NextResponse.json({
       success: true,
       dayOfWeek,
       hourlyData,
       bestWindow,
+      smartOverview,
     });
   } catch (error: any) {
     return NextResponse.json(
@@ -59,11 +61,13 @@ export async function POST() {
 
     const syncedCount = await STQIEngine.syncHourlyAnalytics(tenant.id);
     const bestWindow = await STQIEngine.getBestStreamWindow(tenant.id);
+    const smartOverview = await STQIEngine.getSmartAnalyticsOverview(tenant.id);
 
     return NextResponse.json({
       success: true,
       syncedCount,
       bestWindow,
+      smartOverview,
       message: `تم تحديث ${syncedCount} سجلاً زمنياً بنجاح.`,
     });
   } catch (error: any) {

@@ -23,6 +23,7 @@ export default async function AnalyticsPage() {
   }
 
   const bestWindow = tenantId ? await STQIEngine.getBestStreamWindow(tenantId) : null;
+  const smartOverview = tenantId ? await STQIEngine.getSmartAnalyticsOverview(tenantId) : null;
 
   return (
     <AnalyticsClient
@@ -40,6 +41,7 @@ export default async function AnalyticsPage() {
         confidenceState: h.confidenceState,
       }))}
       initialBestWindow={bestWindow}
+      initialSmartOverview={smartOverview}
     />
   );
 }

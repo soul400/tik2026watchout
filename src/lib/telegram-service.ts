@@ -545,4 +545,74 @@ ${topRec ? `<b>${topRec.title}:</b> ${topRec.subtitle}` : "تثبيت موعد �
 
     return { success: false, error: "نوع التنبيه غير معروف." };
   }
+
+  /**
+   * Automatically discovers and extracts the numeric chatId for a given username (e.g. @mem121212)
+   * from recent incoming messages sent to the bot.
+   */
+  static async resolveChatIdFromUpdates(
+    tenantId: string,
+    targetUsername: string,
+    tokenOverride?: string
+  ): Promise<{ success: boolean; chatId?: string; error?: string; botUsername?: string }> {
+    const config = await this.getConfig(tenantId);
+    const token = tokenOverride || config.botToken;
+
+    if (!token) {
+      return { success: false, error: "يرجى إدخال رمز البوت (Bot Token) أولاً." };
+    }
+
+    const cleanUsername = targetUsername.replace("@", "").trim().toLowerCase();
+    if (!cleanUsername) {
+      return { success: false, error: "يرجى تحديد حساب تليقرام المطلوب (مثل @mem121212)." };
+    }
+
+    try {
+      // 1. Get bot info
+      const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+      const meData = await meRes.json();
+      if (!meRes.ok || !meData.ok) {
+        return { success: false, error: `رمز البوت غير صالح: ${meData.description || "Invalid Token"}` };
+      }
+      const botUsername = meData.result?.username;
+
+      // 2. Fetch updates
+      const updRes = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=-20`);
+      const updData = await updRes.json();
+
+      if (!updRes.ok || !updData.ok) {
+        return { success: false, error: `خطأ من تليقرام: ${updData.description || "Failed to fetch updates"}` };
+      }
+
+      const updates: any[] = updData.result || [];
+      let foundChatId: string | null = null;
+
+      for (const u of updates) {
+        const msg = u.message || u.edited_message || u.callback_query?.message;
+        const fromUser = u.message?.from || u.callback_query?.from;
+        const chatUser = msg?.chat;
+
+        const uName = (fromUser?.username || chatUser?.username || "").toLowerCase();
+        if (uName === cleanUsername) {
+          foundChatId = String(chatUser?.id || fromUser?.id);
+          break;
+        }
+      }
+
+      if (foundChatId) {
+        // Save to DB
+        await this.updateConfig(tenantId, { chatId: foundChatId, isEnabled: true });
+        return { success: true, chatId: foundChatId, botUsername };
+      }
+
+      return {
+        success: false,
+        botUsername,
+        error: `لم يتم العثور على محادثة من @${cleanUsername} حتى الآن. يرجى الدخول إلى البوت (@${botUsername}) والضغط على Start أو إرسال أي رسالة، ثم الضغط على هذا الزر مرة أخرى.`,
+      };
+    } catch (err: any) {
+      return { success: false, error: err?.message || "تعذر فحص تحديثات تليقرام" };
+    }
+  }
 }
+

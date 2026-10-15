@@ -32,6 +32,20 @@ export async function POST(request: Request) {
       });
     }
 
+    if (action === "discover_chat_id") {
+      const targetUsername = body.targetUsername || "mem121212";
+      const res = await TelegramService.resolveChatIdFromUpdates(tenant.id, targetUsername, botToken);
+      return NextResponse.json({
+        success: res.success,
+        error: res.error,
+        chatId: res.chatId,
+        botUsername: res.botUsername,
+        message: res.success
+          ? `تم العثور على المعرف الرقمي لحساب @${targetUsername} (${res.chatId}) وربطه بنجاح!`
+          : res.error,
+      });
+    }
+
     const res = await TelegramService.testSpecificAlert(tenant.id, action);
 
     return NextResponse.json({

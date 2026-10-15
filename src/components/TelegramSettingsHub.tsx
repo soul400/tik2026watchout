@@ -339,8 +339,79 @@ export function TelegramSettingsHub() {
               className="w-full bg-elevated border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-secondaryText/50 focus:outline-none focus:border-turquoise font-mono"
             />
             <p className="text-[10px] text-secondaryText">
-              معرف حسابك الشخصي أو معرف القروب/القناة الخاصة التي تم إضافة البوت إليها كمشرف.
+              المعرف الرقمي للمحادثة أو حساب تليقرام.
             </p>
+          </div>
+
+          {/* Quick Connect for @mem121212 */}
+          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-turquoise/10 via-background to-background border border-turquoise/30 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                <Send className="w-3.5 h-3.5 text-turquoise" />
+                الحساب المستهدف: <span className="text-turquoise font-mono">@mem121212</span>
+              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-turquoise/15 text-turquoise font-bold">
+                ربط تلقائي ذكي
+              </span>
+            </div>
+            <p className="text-[11px] text-secondaryText leading-relaxed">
+              لربط حسابك <strong>@mem121212</strong> فوراً: افتح البوت في تليقرام واضغط <strong>Start</strong>، ثم اضغط الزر أدناه لجلب معرفك الرقمي والربط تلقائياً!
+            </p>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!botToken.trim()) {
+                  setFeedback({ type: "error", message: "يرجى لصق رمز البوت (Bot Token) أولاً." });
+                  return;
+                }
+                setTestingAction("discover_chat_id");
+                setFeedback(null);
+                try {
+                  const res = await fetch("/api/notifications/telegram/test", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      action: "discover_chat_id",
+                      targetUsername: "mem121212",
+                      botToken: botToken.trim(),
+                    }),
+                  });
+                  const data = await res.json();
+                  if (data.success && data.chatId) {
+                    setChatId(data.chatId);
+                    setIsEnabled(true);
+                    setFeedback({
+                      type: "success",
+                      message: `تم العثور على المعرف الرقمي لحساب @mem121212 (${data.chatId}) وتفعيله بنجاح! يمكنك الآن تجربة الإرسال.`,
+                    });
+                    setTimeout(fetchData, 800);
+                  } else {
+                    setFeedback({
+                      type: "error",
+                      message: data.error || "تعذر العثور على محادثة من @mem121212 في البوت بعد.",
+                    });
+                  }
+                } catch {
+                  setFeedback({ type: "error", message: "حدث خطأ أثناء فحص البوت." });
+                } finally {
+                  setTestingAction(null);
+                }
+              }}
+              disabled={testingAction === "discover_chat_id" || !botToken.trim()}
+              className="w-full py-2 rounded-xl bg-turquoise/20 hover:bg-turquoise/30 border border-turquoise/40 text-turquoise text-xs font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-40"
+            >
+              {testingAction === "discover_chat_id" ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>جاري البحث عن @mem121212 في البوت...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>⚡ جلب المعرف وربط @mem121212 تلقائياً</span>
+                </>
+              )}
+            </button>
           </div>
 
           {/* Action Buttons */}

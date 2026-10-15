@@ -4,6 +4,7 @@ import { prisma } from "../lib/prisma";
 import { SmartInventoryService } from "../lib/smart-inventory";
 import { BattleScoreResolver } from "../lib/battle-score-resolver";
 import { STQIEngine } from "../lib/stqi-engine";
+import { EnigmaEngine } from "../lib/enigma-engine";
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,6 +46,14 @@ async function runWorker() {
     console.log(`[Worker] 📊 STQI Analytics synchronized (${synced} hourly records).`);
   } catch (err: any) {
     console.warn(`[Worker] ⚠️ STQI initial sync notice: ${err?.message || err}`);
+  }
+
+  // Synchronize Enigma Forensics on worker startup
+  try {
+    const enigmasSynced = await EnigmaEngine.analyzeAndSyncEnigmaReviews(tenant.id);
+    console.log(`[Worker] 🕵️ Enigma Forensics synchronized (${enigmasSynced} candidates).`);
+  } catch (err: any) {
+    console.warn(`[Worker] ⚠️ Enigma initial sync notice: ${err?.message || err}`);
   }
 
   const adapter = new RealTikTokConnectorAdapter({
@@ -141,6 +150,12 @@ async function runWorker() {
     try {
       const synced = await STQIEngine.syncHourlyAnalytics(tenant.id);
       console.log(`[Worker] 📊 STQI Analytics synchronized after stream end (${synced} records).`);
+    } catch {}
+
+    // Recompute Enigma Forensics after session ends
+    try {
+      const enigmasSynced = await EnigmaEngine.analyzeAndSyncEnigmaReviews(tenant.id);
+      console.log(`[Worker] 🕵️ Enigma Forensics synchronized after stream end (${enigmasSynced} candidates).`);
     } catch {}
   });
 

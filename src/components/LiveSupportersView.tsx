@@ -1,9 +1,11 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Users, Award, Clock, Activity, ShieldCheck } from "lucide-react";
+import { Users, Award, Clock, Activity, ShieldCheck, Eye, EyeOff } from "lucide-react";
 import { ConfidenceBadge } from "@/components/ConfidenceBadge";
 import { DigitalCounter } from "@/components/DigitalCounter";
+import { SupportValue } from "@/components/SupportValue";
+import { useSupportPrivacy } from "@/context/SupportPrivacyContext";
 
 interface SupporterItem {
   id: string;
@@ -35,6 +37,7 @@ export function LiveSupportersView({
   const [totalDiamonds, setTotalDiamonds] = useState<number>(initialTotalDiamonds);
   const [totalPresenceHours, setTotalPresenceHours] = useState<number>(initialTotalPresenceHours);
   const [lastSync, setLastSync] = useState<Date>(new Date());
+  const { hideSupportNumbers, toggleHideSupportNumbers } = useSupportPrivacy();
 
   // Automatic real-time polling every 3 seconds without refreshing page
   useEffect(() => {
@@ -99,7 +102,7 @@ export function LiveSupportersView({
           <div className="flex items-center gap-4 bg-background/90 p-4 rounded-xl border border-white/10 shrink-0 shadow-lg">
             <div className="text-center px-4 border-l border-white/10">
               <span className="text-[11px] text-secondaryText block mb-1">إجمالي دعم النخبة (+10k)</span>
-              <DigitalCounter value={totalDiamonds} size="lg" color="text-gold" suffix="💎" />
+              <DigitalCounter value={totalDiamonds} size="lg" color="text-gold" suffix="💎" isSupportNumber={true} />
             </div>
             <div className="text-center px-2">
               <span className="text-[11px] text-secondaryText block mb-1">إجمالي ساعات التواجد</span>
@@ -123,9 +126,32 @@ export function LiveSupportersView({
               ترتيب نخبة الداعمين أصحاب المساهمات الكبرى التي تتجاوز 10,000 ماسة في البث الحقيقي
             </p>
           </div>
-          <span className="text-xs font-mono font-bold text-gold px-3 py-1 rounded-full bg-gold/10 border border-gold/30">
-            فئة كبار الداعمين (+10K DIAMONDS)
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={toggleHideSupportNumbers}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold transition-all border ${
+                hideSupportNumbers
+                  ? "bg-amber-500/15 text-amber-300 border-amber-500/35 hover:bg-amber-500/25"
+                  : "bg-surface hover:bg-white/10 text-secondaryText hover:text-white border-white/10"
+              }`}
+              title={hideSupportNumbers ? "إظهار أرقام الدعم" : "إخفاء أرقام الدعم"}
+            >
+              {hideSupportNumbers ? (
+                <>
+                  <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+                  <span>أرقام الدعم: مخفية 🔒</span>
+                </>
+              ) : (
+                <>
+                  <Eye className="w-3.5 h-3.5 text-turquoise" />
+                  <span>إخفاء الأرقام</span>
+                </>
+              )}
+            </button>
+            <span className="text-xs font-mono font-bold text-gold px-3 py-1 rounded-full bg-gold/10 border border-gold/30">
+              فئة كبار الداعمين (+10K DIAMONDS)
+            </span>
+          </div>
         </div>
 
         {/* Support Table */}
@@ -183,7 +209,12 @@ export function LiveSupportersView({
                         </span>
                       </td>
                       <td className="py-4 text-center font-mono font-extrabold text-gold text-lg">
-                        {sup.totalDiamonds.toLocaleString()} 💎
+                        <SupportValue value={sup.totalDiamonds} suffix=" 💎" />
+                      </td>
+                      <td className="py-4 text-center">
+                        <span className="font-mono text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                          {percentage}%
+                        </span>
                       </td>
                       <td className="py-4 text-center">
                         <span className="font-mono text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">

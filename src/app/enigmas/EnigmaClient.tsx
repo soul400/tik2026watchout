@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 import { EnigmaCandidate } from "@/lib/enigma-engine";
+import { SupportValue } from "@/components/SupportValue";
 
 interface Props {
   initialReviews: EnigmaCandidate[];
@@ -164,7 +165,9 @@ export function EnigmaClient({ initialReviews }: Props) {
             <span className="text-xs">الدعم تحت القناع الغامض</span>
             <Flame className="w-4 h-4 text-gold" />
           </div>
-          <span className="text-2xl font-bold text-gold">{totalEnigmaDiamonds.toLocaleString()} 💎</span>
+          <span className="text-2xl font-bold text-gold">
+            <SupportValue value={totalEnigmaDiamonds} suffix=" 💎" />
+          </span>
           <span className="text-[11px] text-secondaryText block mt-0.5">أرسلت أثناء إخفاء الاسم</span>
         </div>
 
@@ -177,7 +180,11 @@ export function EnigmaClient({ initialReviews }: Props) {
             {topEnigmaGifter ? `@${topEnigmaGifter.evidence.realUsername}` : "لا يوجد"}
           </span>
           <span className="text-[11px] text-gold font-bold block mt-0.5">
-            {topEnigmaGifter ? `${topEnigmaGifter.evidence.diamondsWithEnigma.toLocaleString()} 💎` : "0 💎"}
+            {topEnigmaGifter ? (
+              <SupportValue value={topEnigmaGifter.evidence.diamondsWithEnigma} suffix=" 💎" />
+            ) : (
+              "0 💎"
+            )}
           </span>
         </div>
       </div>
@@ -267,7 +274,7 @@ export function EnigmaClient({ initialReviews }: Props) {
                       <div className="mt-2 text-[11px] text-secondaryText flex items-center justify-between">
                         <span>الدعم العلني:</span>
                         <span className="font-bold text-gold">
-                          {candidate.evidence.diamondsPublic.toLocaleString()} 💎
+                          <SupportValue value={candidate.evidence.diamondsPublic} suffix=" 💎" />
                         </span>
                       </div>
                     </div>
@@ -301,7 +308,7 @@ export function EnigmaClient({ initialReviews }: Props) {
                       <div className="mt-2 text-[11px] text-secondaryText flex items-center justify-between">
                         <span>الدعم تحت القناع:</span>
                         <span className="font-bold text-gold">
-                          {candidate.evidence.diamondsWithEnigma.toLocaleString()} 💎
+                          <SupportValue value={candidate.evidence.diamondsWithEnigma} suffix=" 💎" />
                         </span>
                       </div>
                     </div>
@@ -384,7 +391,9 @@ export function EnigmaClient({ initialReviews }: Props) {
                               <span className="text-white font-medium">
                                 {g.name} x{g.count}
                               </span>
-                              <span className="text-gold font-bold">{g.diamonds.toLocaleString()} 💎</span>
+                              <span className="text-gold font-bold">
+                                <SupportValue value={g.diamonds} suffix=" 💎" />
+                              </span>
                             </div>
                           ))}
                         </div>

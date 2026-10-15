@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 
 import { StreamerHudHeader } from "@/components/StreamerHudHeader";
+import { SupportValue } from "@/components/SupportValue";
 
 export const dynamic = "force-dynamic";
 
@@ -80,7 +81,7 @@ export default async function DashboardPage() {
               </div>
             </div>
             <div className="mt-3">
-              <DigitalCounter value={totalDiamondsAccumulated} size="xl" color="text-gold" suffix="💎" />
+              <DigitalCounter value={totalDiamondsAccumulated} size="xl" color="text-gold" suffix="💎" isSupportNumber={true} />
             </div>
           </div>
           <div className="pt-3 border-t border-white/5 flex items-center justify-between text-xs text-secondaryText font-mono">
@@ -211,7 +212,7 @@ export default async function DashboardPage() {
                     </span>
                   </td>
                   <td className="text-center font-mono font-black text-gold text-lg">
-                    {sup.totalDiamonds.toLocaleString()} 💎
+                    <SupportValue value={sup.totalDiamonds} suffix=" 💎" />
                   </td>
                   <td className="text-center font-mono font-bold text-turquoise">
                     {sup.totalLikes.toLocaleString()}

@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Flame,
 } from "lucide-react";
+import { SupportValue } from "@/components/SupportValue";
 
 interface HourlyItem {
   id: string;
@@ -186,7 +187,9 @@ export function AnalyticsClient({ initialHourly, initialBestWindow }: Props) {
               <div className="flex flex-wrap items-center gap-4 pt-2 text-xs">
                 <div className="bg-background/40 px-3 py-1.5 rounded-lg border border-white/5">
                   <span className="text-secondaryText block text-[10px]">متوسط الدعم</span>
-                  <span className="font-bold text-gold">{bestWindow.avgDiamonds.toLocaleString()} 💎 / ساعة</span>
+                  <span className="font-bold text-gold">
+                    <SupportValue value={bestWindow.avgDiamonds} suffix=" 💎 / ساعة" />
+                  </span>
                 </div>
                 <div className="bg-background/40 px-3 py-1.5 rounded-lg border border-white/5">
                   <span className="text-secondaryText block text-[10px]">متوسط التعليقات</span>
@@ -247,7 +250,9 @@ export function AnalyticsClient({ initialHourly, initialBestWindow }: Props) {
             <span className="text-xs">أعلى كثافة دعم بالماس</span>
             <Flame className="w-4 h-4 text-gold" />
           </div>
-          <span className="text-xl font-bold text-gold">{maxDiamondsHour.toLocaleString()} 💎</span>
+          <span className="text-xl font-bold text-gold">
+            <SupportValue value={maxDiamondsHour} suffix=" 💎" />
+          </span>
           <span className="text-[11px] text-secondaryText block mt-0.5">لكل ساعة في الذروة</span>
         </div>
 
@@ -333,7 +338,9 @@ export function AnalyticsClient({ initialHourly, initialBestWindow }: Props) {
                         <span>{formatHourWindow(h.riyadhHour)}</span>
                       </td>
                       <td className="py-3 text-secondaryText">{h.sampleSessions} جلسات</td>
-                      <td className="py-3 font-bold text-gold">{h.avgDiamonds.toLocaleString()} 💎</td>
+                      <td className="py-3 font-bold text-gold">
+                        <SupportValue value={h.avgDiamonds} suffix=" 💎" />
+                      </td>
                       <td className="py-3 text-white">{h.avgComments.toLocaleString()} 💬</td>
                       <td className="py-3 text-secondaryText">{h.avgLikes.toLocaleString()} ❤️</td>
                       <td className="py-3">

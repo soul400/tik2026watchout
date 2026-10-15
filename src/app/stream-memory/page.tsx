@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { ConfidenceBadge } from "@/components/ConfidenceBadge";
 import { History, Calendar, Swords, Shield, ChevronLeft } from "lucide-react";
+import { SupportValue } from "@/components/SupportValue";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +54,9 @@ export default async function StreamMemoryPage() {
               <div className="flex items-center gap-4 text-xs">
                 <div>
                   <span className="text-secondaryText block">إجمالي الماس المرصود:</span>
-                  <span className="font-bold text-gold">{s.totalDiamonds.toLocaleString()} 💎</span>
+                  <span className="font-bold text-gold">
+                    <SupportValue value={s.totalDiamonds} suffix=" 💎" />
+                  </span>
                 </div>
                 <div>
                   <span className="text-secondaryText block">التعليقات:</span>

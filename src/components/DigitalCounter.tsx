@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSupportPrivacy } from "@/context/SupportPrivacyContext";
 
 interface DigitalCounterProps {
   value: number;
@@ -10,6 +11,7 @@ interface DigitalCounterProps {
   color?: string;
   className?: string;
   size?: "sm" | "md" | "lg" | "xl";
+  isSupportNumber?: boolean;
 }
 
 export function DigitalCounter({
@@ -20,7 +22,9 @@ export function DigitalCounter({
   color = "text-white",
   className = "",
   size = "md",
+  isSupportNumber = false,
 }: DigitalCounterProps) {
+  const { hideSupportNumbers } = useSupportPrivacy();
   const [displayValue, setDisplayValue] = useState(0);
 
   useEffect(() => {
@@ -54,6 +58,19 @@ export function DigitalCounter({
     lg: "text-3xl",
     xl: "text-4xl",
   };
+
+  if (isSupportNumber && hideSupportNumbers) {
+    return (
+      <span
+        title="أرقام الدعم مخفية لحماية الخصوصية (انقر زر العين بالأعلى للإظهار)"
+        className={`digital-counter font-mono font-bold tracking-widest inline-flex items-baseline ${sizeClasses[size]} ${color} ${className}`}
+      >
+        {prefix && <span className="text-xs font-normal opacity-70 ml-1">{prefix}</span>}
+        <span className="tracking-widest">••••••</span>
+        {suffix && <span className="text-xs font-normal opacity-70 mr-1">{suffix}</span>}
+      </span>
+    );
+  }
 
   return (
     <span

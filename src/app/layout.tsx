@@ -3,6 +3,7 @@ import { IBM_Plex_Sans_Arabic, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { AppSidebar } from "@/components/AppSidebar";
 import { AppHeader } from "@/components/AppHeader";
+import { SupportPrivacyProvider } from "@/context/SupportPrivacyContext";
 
 const ibmPlexArabic = IBM_Plex_Sans_Arabic({
   subsets: ["arabic"],
@@ -31,13 +32,15 @@ export default function RootLayout({
   return (
     <html lang="ar" dir="rtl" className={`${ibmPlexArabic.variable} ${spaceGrotesk.variable}`}>
       <body className="min-h-screen bg-background text-primaryText antialiased flex flex-row selection:bg-turquoise/30 selection:text-white">
-        <AppSidebar />
-        <div className="flex-1 flex flex-col min-w-0 min-h-screen">
-          <AppHeader />
-          <main className="flex-1 p-6 md:p-8 overflow-y-auto">
-            {children}
-          </main>
-        </div>
+        <SupportPrivacyProvider>
+          <AppSidebar />
+          <div className="flex-1 flex flex-col min-w-0 min-h-screen">
+            <AppHeader />
+            <main className="flex-1 p-6 md:p-8 overflow-y-auto">
+              {children}
+            </main>
+          </div>
+        </SupportPrivacyProvider>
       </body>
     </html>
   );

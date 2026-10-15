@@ -256,4 +256,30 @@ export class SmartInventoryService {
 
     return results;
   }
+
+  /**
+   * Resets all tactical tools inventory data (grants, consumptions, alerts) for the tenant.
+   */
+  static async resetInventory(tenantId: string) {
+    return await prisma.$transaction(async (tx) => {
+      await tx.inventoryAlert.deleteMany({ where: { tenantId } });
+      await tx.toolConsumption.deleteMany({ where: { tenantId } });
+      const deletedGrants = await tx.toolGrant.deleteMany({ where: { tenantId } });
+
+      await tx.auditLog.create({
+        data: {
+          tenantId,
+          action: "INVENTORY_RESET",
+          entityType: "TOOL_INVENTORY",
+          entityId: "ALL",
+          detailsJson: JSON.stringify({
+            deletedGrantsCount: deletedGrants.count,
+            timestamp: new Date().toISOString(),
+          }),
+        },
+      });
+
+      return { deletedGrantsCount: deletedGrants.count };
+    });
+  }
 }

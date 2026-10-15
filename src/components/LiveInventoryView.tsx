@@ -19,6 +19,10 @@ import {
   Hourglass,
   Hammer,
   CloudFog,
+  Trash2,
+  Lock,
+  KeyRound,
+  Loader2,
 } from "lucide-react";
 import { ConfidenceBadge } from "@/components/ConfidenceBadge";
 import { DigitalCounter } from "@/components/DigitalCounter";
@@ -72,6 +76,67 @@ export function LiveInventoryView({ initialCounters, initialGrants }: LiveInvent
   const [selectedTool, setSelectedTool] = useState<string>("ALL");
   const [selectedStatus, setSelectedStatus] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState<string>("");
+
+  // Reset Modal States
+  const [showResetModal, setShowResetModal] = useState<boolean>(false);
+  const [resetPassword, setResetPassword] = useState<string>("");
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null);
+  const [isResetting, setIsResetting] = useState<boolean>(false);
+
+  const handleResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError(null);
+    setResetSuccess(null);
+
+    if (!resetPassword.trim()) {
+      setResetError("يرجى إدخال كلمة المرور");
+      return;
+    }
+
+    setIsResetting(true);
+    try {
+      const res = await fetch("/api/inventory/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: resetPassword.trim() }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setResetError(data.message || "كلمة المرور غير صحيحة");
+        setIsResetting(false);
+        return;
+      }
+
+      setResetSuccess(data.message || "تم تصفير البيانات بنجاح");
+      if (data.counters) {
+        setCounters(data.counters);
+      } else {
+        setCounters((prev) =>
+          prev.map((c) => ({
+            ...c,
+            totalAvailable: 0,
+            totalReceived: 0,
+            totalConsumed: 0,
+            totalExpiringSoon: 0,
+            totalExpired: 0,
+          }))
+        );
+      }
+      setGrants([]);
+      setResetPassword("");
+
+      setTimeout(() => {
+        setShowResetModal(false);
+        setResetSuccess(null);
+      }, 1500);
+    } catch (err: any) {
+      setResetError("فشل الاتصال بالخادم أثناء التصفير");
+    } finally {
+      setIsResetting(false);
+    }
+  };
 
   // Automatic real-time polling every 3 seconds
   useEffect(() => {
@@ -224,19 +289,35 @@ export function LiveInventoryView({ initialCounters, initialGrants }: LiveInvent
             </p>
           </div>
 
-          <div className="flex items-center gap-4 bg-background/90 p-4 px-5 rounded-2xl border border-turquoise/30 shrink-0 shadow-lg">
-            <div className="text-center px-4 border-l border-white/10">
-              <span className="text-[11px] text-secondaryText font-mono block mb-1">الرصيد النشط</span>
-              <DigitalCounter value={totalAllAvailable} size="lg" color="text-turquoise" />
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+            <div className="flex items-center gap-4 bg-background/90 p-4 px-5 rounded-2xl border border-turquoise/30 shadow-lg">
+              <div className="text-center px-4 border-l border-white/10">
+                <span className="text-[11px] text-secondaryText font-mono block mb-1">الرصيد النشط</span>
+                <DigitalCounter value={totalAllAvailable} size="lg" color="text-turquoise" />
+              </div>
+              <div className="text-center px-4 border-l border-white/10">
+                <span className="text-[11px] text-secondaryText font-mono block mb-1">المستلم</span>
+                <DigitalCounter value={totalAllReceived} size="md" color="text-white" />
+              </div>
+              <div className="text-center px-2">
+                <span className="text-[11px] text-secondaryText font-mono block mb-1">المستهلك</span>
+                <DigitalCounter value={totalAllConsumed} size="md" color="text-secondaryText" />
+              </div>
             </div>
-            <div className="text-center px-4 border-l border-white/10">
-              <span className="text-[11px] text-secondaryText font-mono block mb-1">المستلم</span>
-              <DigitalCounter value={totalAllReceived} size="md" color="text-white" />
-            </div>
-            <div className="text-center px-2">
-              <span className="text-[11px] text-secondaryText font-mono block mb-1">المستهلك</span>
-              <DigitalCounter value={totalAllConsumed} size="md" color="text-secondaryText" />
-            </div>
+
+            <button
+              onClick={() => {
+                setResetPassword("");
+                setResetError(null);
+                setResetSuccess(null);
+                setShowResetModal(true);
+              }}
+              className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold transition-all shadow-md hover:shadow-rose-500/15 active:scale-95 group"
+              title="تصفير بيانات الخزينة التكتيكية"
+            >
+              <Trash2 className="w-4 h-4 text-rose-400 group-hover:scale-110 transition-transform" />
+              <span>تصفير البيانات</span>
+            </button>
           </div>
         </div>
       </div>
@@ -590,6 +671,109 @@ export function LiveInventoryView({ initialCounters, initialGrants }: LiveInvent
           )}
         </div>
       </div>
+
+      {/* Password-Protected Reset Confirmation Modal */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#121820] border border-rose-500/30 rounded-2xl p-6 md:p-8 max-w-md w-full shadow-2xl relative overflow-hidden">
+            {/* Ambient Background Accent */}
+            <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/10 rounded-full blur-2xl pointer-events-none" />
+
+            <div className="flex items-start justify-between gap-4 mb-5">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                  <Trash2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-white">تصفير بيانات الخزينة</h3>
+                  <p className="text-xs text-rose-400 font-mono flex items-center gap-1 mt-0.5">
+                    <Lock className="w-3 h-3" />
+                    عملية محمية بكلمة مرور
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isResetting) setShowResetModal(false);
+                }}
+                disabled={isResetting}
+                className="text-secondaryText hover:text-white transition-colors p-1 rounded-lg"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-secondaryText leading-relaxed mb-6 bg-rose-950/20 p-3.5 rounded-xl border border-rose-500/20">
+              <strong className="text-rose-300 block mb-1">تنبيه هام جداً:</strong>
+              سيؤدي هذا الإجراء إلى حذف جميع سجلات الأدوات المرصودة، المستهلكة، والتنبيهات نهائياً وإعادة جميع عدادات الأدوات إلى الصفر فوراً.
+            </p>
+
+            <form onSubmit={handleResetSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-white mb-2 flex items-center gap-1.5">
+                  <KeyRound className="w-3.5 h-3.5 text-rose-400" />
+                  أدخل كلمة المرور لتأكيد التصفير:
+                </label>
+                <input
+                  type="password"
+                  value={resetPassword}
+                  onChange={(e) => {
+                    setResetPassword(e.target.value);
+                    if (resetError) setResetError(null);
+                  }}
+                  placeholder="كلمة المرور (0000)"
+                  autoFocus
+                  disabled={isResetting}
+                  className="w-full bg-background border border-white/10 rounded-xl px-4 py-3 text-center text-lg font-mono tracking-widest text-white placeholder-secondaryText/40 focus:outline-none focus:border-rose-500/50 transition-colors"
+                />
+              </div>
+
+              {resetError && (
+                <div className="flex items-center gap-2 p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-semibold">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                  <span>{resetError}</span>
+                </div>
+              )}
+
+              {resetSuccess && (
+                <div className="flex items-center gap-2 p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-semibold">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span>{resetSuccess}</span>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowResetModal(false)}
+                  disabled={isResetting}
+                  className="flex-1 py-2.5 rounded-xl bg-surface border border-white/10 text-xs font-bold text-secondaryText hover:text-white transition-colors"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={isResetting || !resetPassword}
+                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white text-xs font-bold transition-all shadow-lg shadow-rose-900/40 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isResetting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>جاري التصفير...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      <span>تأكيد التصفير</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

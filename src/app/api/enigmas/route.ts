@@ -77,6 +77,21 @@ export async function PATCH(request: Request) {
       },
     });
 
+    if (status === "CONFIRMED") {
+      try {
+        const { TelegramService } = await import("@/lib/telegram-service");
+        const evidence = JSON.parse(updated.evidenceJson);
+        await TelegramService.sendEnigmaUnmaskedAlert(updated.tenantId, {
+          enigmaDisplayId: evidence.enigmaUsername || evidence.enigmaDisplayName,
+          realUsername: evidence.realUsername,
+          realDisplayName: evidence.realDisplayName,
+          diamondsWithEnigma: evidence.diamondsWithEnigma || 0,
+          diamondsPublic: evidence.diamondsPublic || 0,
+          matchConfidence: updated.confidenceScore,
+        }).catch(() => {});
+      } catch {}
+    }
+
     return NextResponse.json({
       success: true,
       updated,

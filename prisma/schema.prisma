@@ -34,6 +34,8 @@ model Tenant {
   enigmaReviews      EnigmaReview[]
   reports            AnalyticalReport[]
   auditLogs          AuditLog[]
+  telegramConfig     TelegramConfig?
+  telegramLogs       TelegramNotificationLog[]
 }
 
 model User {
@@ -420,3 +422,43 @@ model AuditLog {
 
   @@index([tenantId, createdAt])
 }
+
+// -------------------------------------------------------------
+// 11. Telegram Alerts & Automated Notification Hub
+// -------------------------------------------------------------
+
+model TelegramConfig {
+  id                    String    @id @default(cuid())
+  tenantId              String    @unique
+  botToken              String?
+  chatId                String?
+  isEnabled             Boolean   @default(false)
+  alertVipEntry         Boolean   @default(true)
+  vipDiamondsThreshold  Int       @default(5000)
+  alertEnigmaUnmasked   Boolean   @default(true)
+  alertDailyChampions   Boolean   @default(true)
+  alertDailyStqi        Boolean   @default(true)
+  lastDailyChampionsAt  DateTime?
+  lastDailyStqiAt       DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model TelegramNotificationLog {
+  id           String   @id @default(cuid())
+  tenantId     String
+  alertType    String   // VIP_ENTRY, ENIGMA_UNMASKED, DAILY_CHAMPIONS, DAILY_STQI, TEST
+  recipient    String
+  messageText  String
+  status       String   // SENT, FAILED
+  errorReason  String?
+  metadataJson String?
+  createdAt    DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+

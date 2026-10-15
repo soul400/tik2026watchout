@@ -5,6 +5,7 @@ import { SmartInventoryService } from "../lib/smart-inventory";
 import { BattleScoreResolver } from "../lib/battle-score-resolver";
 import { STQIEngine } from "../lib/stqi-engine";
 import { EnigmaEngine } from "../lib/enigma-engine";
+import { TelegramService } from "../lib/telegram-service";
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -171,6 +172,35 @@ async function runWorker() {
   console.log(`[Worker] Starting live monitor for @${targetUsername}...`);
   let lastReconcileTime = 0;
   let lastStqiSyncTime = Date.now();
+  let lastTelegramDailyCheck = 0;
+
+  const checkTelegramDailySchedule = async () => {
+    if (Date.now() - lastTelegramDailyCheck < 5 * 60 * 1000) return;
+    lastTelegramDailyCheck = Date.now();
+    try {
+      const tgConfig = await TelegramService.getConfig(tenant.id);
+      if (tgConfig.isEnabled) {
+        // Daily Champions
+        if (tgConfig.alertDailyChampions) {
+          const lastChampTime = tgConfig.lastDailyChampionsAt ? new Date(tgConfig.lastDailyChampionsAt).getTime() : 0;
+          if (Date.now() - lastChampTime > 24 * 60 * 60 * 1000) {
+            console.log("[Worker] 📢 Dispatching Daily Champions Telegram Alert...");
+            await TelegramService.sendDailyChampionsAlert(tenant.id).catch(() => {});
+          }
+        }
+        // Daily STQI
+        if (tgConfig.alertDailyStqi) {
+          const lastStqiTime = tgConfig.lastDailyStqiAt ? new Date(tgConfig.lastDailyStqiAt).getTime() : 0;
+          if (Date.now() - lastStqiTime > 24 * 60 * 60 * 1000) {
+            console.log("[Worker] 📈 Dispatching Daily STQI Telegram Alert...");
+            await TelegramService.sendDailyStqiAlert(tenant.id).catch(() => {});
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[Worker] Telegram schedule check notice: ${err?.message || err}`);
+    }
+  };
 
   while (true) {
     try {
@@ -185,6 +215,9 @@ async function runWorker() {
         lastStqiSyncTime = Date.now();
         await STQIEngine.syncHourlyAnalytics(tenant.id).catch(() => {});
       }
+
+      // Check daily automated Telegram alerts
+      await checkTelegramDailySchedule();
 
       const isLive = await adapter.checkIsLive(targetUsername);
 

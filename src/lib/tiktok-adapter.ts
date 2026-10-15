@@ -61,6 +61,10 @@ export class RealTikTokConnectorAdapter extends EventEmitter implements ITikTokC
         this.emit("roomUser", data);
       });
 
+      conn.on("member", (data: any) => {
+        this.emit("member", data);
+      });
+
       conn.on("linkMicBattle", (data: any) => {
         this.emit("linkMicBattle", data);
       });

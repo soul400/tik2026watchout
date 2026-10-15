@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
-import { Settings, Shield, User, Globe, Key, Database } from "lucide-react";
+import { Settings, Shield, User } from "lucide-react";
+import { TelegramSettingsHub } from "@/components/TelegramSettingsHub";
 
 export const dynamic = "force-dynamic";
 
@@ -13,15 +14,19 @@ export default async function SettingsPage() {
   });
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="space-y-8 max-w-7xl mx-auto pb-12">
       {/* Header */}
       <div>
-        <h2 className="text-2xl font-bold text-white tracking-tight">الإعدادات وتعدد المستأجرين</h2>
+        <h2 className="text-2xl font-bold text-white tracking-tight">الإعدادات والتكاملات الذكية</h2>
         <p className="text-sm text-secondaryText">
-          إدارة إعدادات المستأجر، ربط حسابات الستريمرز، وكتالوج الأدوات التكتيكية
+          إدارة إعدادات المستأجر، تنبيهات تليقرام المباشرة، وربط حسابات الستريمرز
         </p>
       </div>
 
+      {/* 1. TELEGRAM AUTOMATED NOTIFICATIONS HUB */}
+      <TelegramSettingsHub />
+
+      {/* 2. TENANT & STREAMERS INFO */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Tenant Details */}
         <div className="bg-surface rounded-xl border border-white/5 p-6">

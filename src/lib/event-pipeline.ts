@@ -1,6 +1,7 @@
 import { prisma } from "./prisma";
 import { ITikTokConnectorAdapter, NormalizedLiveEvent } from "./tiktok-types";
 import { BattleScoreResolver, BattleContext } from "./battle-score-resolver";
+import { TelegramService } from "./telegram-service";
 
 export interface EventPipelineStats {
   receivedCount: number;
@@ -17,6 +18,8 @@ export class LiveEventPipeline {
     errorCount: 0,
   };
 
+  private sessionVipAlertsSent = new Set<string>();
+
   constructor(
     private tenantId: string,
     private liveSessionId: string,
@@ -30,6 +33,7 @@ export class LiveEventPipeline {
     this.adapter.on("chat", (data) => this.handleChat(data));
     this.adapter.on("like", (data) => this.handleLike(data));
     this.adapter.on("roomUser", (data) => this.handleRoomUser(data));
+    this.adapter.on("member", (data) => this.handleMember(data));
     this.adapter.on("linkMicBattle", (data) => this.handleBattle(data));
     this.adapter.on("linkMicArmies", (data) => this.handleArmies(data));
     this.adapter.on("linkMicBattleItemCard", (data) => this.handleBattleItemCard(data));
@@ -121,6 +125,8 @@ export class LiveEventPipeline {
           data: { category: "CONTINUOUS" },
         }).catch(() => {});
       }
+
+      await this.checkAndTriggerVipAlert(actor.platformUserId, actor.username, actor.displayName);
 
       // 3. Update Live Session Totals
       await prisma.liveSession.update({
@@ -263,6 +269,8 @@ export class LiveEventPipeline {
         },
       });
 
+      await this.checkAndTriggerVipAlert(actor.platformUserId, actor.username, actor.displayName);
+
       this.stats.processedCount++;
       return null;
     } catch (err) {
@@ -331,6 +339,46 @@ export class LiveEventPipeline {
             data: { peakViewers: count },
           }).catch(() => {});
         }
+      }
+    } catch {
+      // non-blocking
+    }
+  }
+
+  private async checkAndTriggerVipAlert(platformUserId: string, username: string, displayName: string): Promise<void> {
+    if (!platformUserId || platformUserId.startsWith("guest_") || this.sessionVipAlertsSent.has(platformUserId)) {
+      return;
+    }
+
+    try {
+      const config = await TelegramService.getConfig(this.tenantId);
+      if (!config.isEnabled || !config.alertVipEntry) {
+        return;
+      }
+
+      const supporter = await prisma.supporter.findUnique({
+        where: {
+          tenantId_platformUserId: {
+            tenantId: this.tenantId,
+            platformUserId,
+          },
+        },
+      });
+
+      if (supporter && supporter.totalDiamonds >= config.vipDiamondsThreshold) {
+        this.sessionVipAlertsSent.add(platformUserId);
+        await TelegramService.sendVipEntryAlert(this.tenantId, supporter).catch(() => {});
+      }
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  async handleMember(data: any): Promise<void> {
+    try {
+      const actor = this.extractActor(data);
+      if (actor.platformUserId && !actor.platformUserId.startsWith("guest_")) {
+        await this.checkAndTriggerVipAlert(actor.platformUserId, actor.username, actor.displayName);
       }
     } catch {
       // non-blocking

@@ -93,7 +93,21 @@ async function runWorker() {
   });
 
   adapter.on("linkMicBattleItemCard", (data: any) => {
-    console.log(`[LIVE TACTICAL TOOL] ⚡ Tactical Battle Item Card Event Received`);
+    // Log the raw payload so we know what TikTok actually sends
+    const topKeys = Object.keys(data || {}).filter((k) => !['common'].includes(k));
+    const awardedCount = data?.awardCardNotice?.awardedUsers?.length ?? 0;
+    const noticeCardType = data?.awardCardNotice?.cardType ?? 'N/A';
+    const noticeCardName = data?.awardCardNotice?.cardName ?? data?.awardCardNotice?.toolKey ?? 'N/A';
+    console.log(
+      `[LIVE TACTICAL TOOL] ⚡ ItemCard | msgType=${data?.msgType} | battle=${data?.battleId || 'none'} | awardedUsers=${awardedCount} | cardType=${noticeCardType} | cardName=${noticeCardName} | topKeys=[${topKeys.join(',')}]`
+    );
+  });
+
+  adapter.on("linkMicBattleTask", (data: any) => {
+    const topKeys = Object.keys(data || {}).filter((k) => !['common'].includes(k));
+    console.log(
+      `[LIVE BATTLE TASK] 📋 BattleTask event | msgType=${data?.msgType} | topKeys=[${topKeys.join(',')}]`
+    );
   });
 
   adapter.on("streamEnd", async () => {

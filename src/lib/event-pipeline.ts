@@ -32,6 +32,7 @@ export class LiveEventPipeline {
     this.adapter.on("linkMicBattle", (data) => this.handleBattle(data));
     this.adapter.on("linkMicArmies", (data) => this.handleArmies(data));
     this.adapter.on("linkMicBattleItemCard", (data) => this.handleBattleItemCard(data));
+    this.adapter.on("linkMicBattleTask", (data) => this.handleBattleItemCard(data));
   }
 
   private extractActor(data: any) {
@@ -656,6 +657,37 @@ export class LiveEventPipeline {
   async handleBattleItemCard(data: any): Promise<void> {
     this.stats.receivedCount++;
     try {
+      // ── DIAGNOSTIC: log full raw payload so we can learn TikTok's exact field names ──
+      const payloadSummary = {
+        msgType: data.msgType,
+        battleId: data.battleId,
+        awardCardNotice: data.awardCardNotice ? {
+          noticeId: data.awardCardNotice.noticeId,
+          cardType: data.awardCardNotice.cardType,
+          cardName: data.awardCardNotice.cardName,
+          toolKey: data.awardCardNotice.toolKey,
+          count: data.awardCardNotice.count,
+          displayContent: data.awardCardNotice.displayContent,
+          awardedUsers_count: Array.isArray(data.awardCardNotice.awardedUsers) ? data.awardCardNotice.awardedUsers.length : 0,
+          awardedUsers_sample: Array.isArray(data.awardCardNotice.awardedUsers)
+            ? data.awardCardNotice.awardedUsers.slice(0, 3).map((u: any) => ({
+                userId: u?.user?.userId || u?.userId,
+                displayId: u?.user?.displayId || u?.displayId,
+                cardType: u?.cardType,
+                cardName: u?.cardName,
+                toolKey: u?.toolKey,
+                count: u?.count || u?.quantity || u?.cardNum || u?.num,
+              }))
+            : null,
+        } : undefined,
+        cardObtainGuide: data.cardObtainGuide ? {
+          cardName: data.cardObtainGuide.cardName,
+          toolKey: data.cardObtainGuide.toolKey,
+        } : undefined,
+        topLevelKeys: Object.keys(data || {}).filter((k) => !['common'].includes(k)),
+      };
+      console.log(`[TACTICAL_RAW] msgType=${data.msgType} | battleId=${data.battleId || 'none'} | summary=${JSON.stringify(payloadSummary)}`);
+
       let targetBattleId = String(data.battleId || "");
       if (!targetBattleId) {
         const activeBattle = await prisma.battle.findFirst({
@@ -671,30 +703,48 @@ export class LiveEventPipeline {
       const { SmartInventoryService } = await import("./smart-inventory");
 
       // Helper to classify tool type from raw strings and message types
+      // We accumulate ALL string tokens from a field and check any match.
       const resolveToolKey = (rawStr: string, msgType?: number): string => {
         const s = (rawStr || "").toLowerCase();
-        if (s.includes("wave") || s.includes("song") || s.includes("surge") || s.includes("sing") || msgType === 8) {
+        // Song Surge / Wave
+        if (s.includes("wave") || s.includes("song") || s.includes("surge") || s.includes("sing") ||
+            s.includes("موجة") || s.includes("غناء") || msgType === 8) {
           return "SONG_SURGE";
         }
-        if (s.includes("fog") || s.includes("smoke") || s.includes("mist") || msgType === 3) {
+        // Boost Fog / Magic Mist / Smoke
+        if (s.includes("fog") || s.includes("smoke") || s.includes("mist") || s.includes("boost_fog") ||
+            s.includes("ضباب") || s.includes("دخان") || s.includes("سحاب") ||
+            s.includes("magic") || msgType === 3) {
           return "BOOST_FOG";
         }
-        if (s.includes("time") || s.includes("timer") || s.includes("extender") || msgType === 5) {
+        // Time Extender
+        if (s.includes("time") || s.includes("timer") || s.includes("extender") || s.includes("extra_time") ||
+            s.includes("وقت") || s.includes("تمديد") || msgType === 5) {
           return "TIME_EXTENDER";
         }
-        if (s.includes("hammer") || s.includes("stun") || s.includes("special_effect") || msgType === 6 || msgType === 9) {
+        // Hammer / Stun
+        if (s.includes("hammer") || s.includes("stun") || s.includes("special_effect") ||
+            s.includes("مطرقة") || s.includes("تعطيل") || msgType === 6 || msgType === 9) {
           return "HAMMER";
         }
-        if (s.includes("speed") || s.includes("challenge") || s.includes("booster")) {
+        // Speed Booster / Challenge
+        if (s.includes("speed") || s.includes("challenge") || s.includes("booster") ||
+            s.includes("سرعة") || s.includes("تحدي")) {
           return "SPEED_BOOSTER";
         }
-        if (s.includes("shield") || s.includes("defense") || s.includes("protect")) {
+        // Shield / Defense
+        if (s.includes("shield") || s.includes("defense") || s.includes("protect") ||
+            s.includes("درع") || s.includes("حماية")) {
           return "SHIELD_DEFENSE";
         }
-        if (s.includes("glove") || s.includes("critical") || s.includes("vault") || msgType === 2 || msgType === 12) {
+        // Glove / Critical Strike / Vault
+        if (s.includes("glove") || s.includes("critical") || s.includes("vault") ||
+            s.includes("قفاز") || s.includes("ضربة") || msgType === 2 || msgType === 12) {
           return "GLOVE";
         }
-        return "GLOVE"; // Default standard power-up
+        // Unknown — still default to GLOVE but log a warning
+        console.warn(`[TACTICAL_RESOLVE] Could not classify tool: rawStr="${rawStr}" msgType=${msgType} → defaulting to GLOVE`);
+        return "GLOVE";
       };
 
       // 1. Check AwardCardNotice (Tools awarded at the end or during battle)
@@ -850,6 +900,7 @@ export class LiveEventPipeline {
       this.stats.processedCount++;
     } catch (err) {
       this.stats.errorCount++;
+      console.error("[TACTICAL_ERROR] handleBattleItemCard failed:", err);
     }
   }
 

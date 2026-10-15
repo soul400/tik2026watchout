@@ -73,6 +73,14 @@ export class RealTikTokConnectorAdapter extends EventEmitter implements ITikTokC
         this.emit("linkMicBattleItemCard", data);
       });
 
+      conn.on("linkMicBattleTask", (data: any) => {
+        this.emit("linkMicBattleTask", data);
+      });
+
+      conn.on("linkMicBattlePunishFinish", (data: any) => {
+        this.emit("linkMicBattleItemCard", data); // treat punish-finish as item card awards
+      });
+
       const state = await this.connection.connect();
       this.isLiveConnected = true;
       return true;

@@ -8,6 +8,28 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
+export interface BattleScorePayload {
+  battleId: string;
+  battleType: "1V1" | "2V2";
+  team1Score: number;
+  team2Score: number;
+  team1Members: string[];
+  team2Members: string[];
+  isFinal?: boolean;
+}
+
+interface BattleTelegramTracker {
+  messageId: number;
+  lastSentTime: number;
+  lastT1: number;
+  lastT2: number;
+  pendingTimer?: NodeJS.Timeout | null;
+  lastPayload?: BattleScorePayload;
+}
+
+// In-memory tracker for active battle score messages across throttling cycles
+const activeBattleTrackers = new Map<string, BattleTelegramTracker>();
+
 export interface TelegramConfigDTO {
   id?: string;
   tenantId: string;
@@ -19,6 +41,7 @@ export interface TelegramConfigDTO {
   alertEnigmaUnmasked: boolean;
   alertDailyChampions: boolean;
   alertDailyStqi: boolean;
+  alertBattleScores: boolean;
   lastDailyChampionsAt?: Date | null;
   lastDailyStqiAt?: Date | null;
 }
@@ -45,6 +68,7 @@ export class TelegramService {
           alertEnigmaUnmasked: true,
           alertDailyChampions: true,
           alertDailyStqi: true,
+          alertBattleScores: true,
         },
       });
     }
@@ -60,6 +84,7 @@ export class TelegramService {
       alertEnigmaUnmasked: config.alertEnigmaUnmasked,
       alertDailyChampions: config.alertDailyChampions,
       alertDailyStqi: config.alertDailyStqi,
+      alertBattleScores: config.alertBattleScores ?? true,
       lastDailyChampionsAt: config.lastDailyChampionsAt,
       lastDailyStqiAt: config.lastDailyStqiAt,
     };
@@ -80,6 +105,7 @@ export class TelegramService {
         alertEnigmaUnmasked: data.alertEnigmaUnmasked !== undefined ? data.alertEnigmaUnmasked : undefined,
         alertDailyChampions: data.alertDailyChampions !== undefined ? data.alertDailyChampions : undefined,
         alertDailyStqi: data.alertDailyStqi !== undefined ? data.alertDailyStqi : undefined,
+        alertBattleScores: data.alertBattleScores !== undefined ? data.alertBattleScores : undefined,
       },
       create: {
         tenantId,
@@ -91,6 +117,7 @@ export class TelegramService {
         alertEnigmaUnmasked: data.alertEnigmaUnmasked ?? true,
         alertDailyChampions: data.alertDailyChampions ?? true,
         alertDailyStqi: data.alertDailyStqi ?? true,
+        alertBattleScores: data.alertBattleScores ?? true,
       },
     });
 
@@ -105,6 +132,7 @@ export class TelegramService {
       alertEnigmaUnmasked: updated.alertEnigmaUnmasked,
       alertDailyChampions: updated.alertDailyChampions,
       alertDailyStqi: updated.alertDailyStqi,
+      alertBattleScores: updated.alertBattleScores ?? true,
       lastDailyChampionsAt: updated.lastDailyChampionsAt,
       lastDailyStqiAt: updated.lastDailyStqiAt,
     };
@@ -115,7 +143,7 @@ export class TelegramService {
    */
   static async sendMessage(
     tenantId: string,
-    alertType: "VIP_ENTRY" | "ENIGMA_UNMASKED" | "DAILY_CHAMPIONS" | "DAILY_STQI" | "TEST",
+    alertType: "VIP_ENTRY" | "ENIGMA_UNMASKED" | "DAILY_CHAMPIONS" | "DAILY_STQI" | "BATTLE_SCORE" | "BATTLE_END" | "TEST",
     messageHtml: string,
     metadata?: any,
     overrideToken?: string,
@@ -198,6 +226,54 @@ export class TelegramService {
         },
       });
       return { success: false, error: errorMsg };
+    }
+  }
+
+  /**
+   * Edits an existing message in-place via Telegram Bot API (editMessageText).
+   * Useful for live score updates without flooding chat notifications.
+   */
+  static async editMessage(
+    tenantId: string,
+    messageId: number,
+    messageHtml: string,
+    overrideToken?: string,
+    overrideChatId?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    const config = await this.getConfig(tenantId);
+    const token = overrideToken || config.botToken;
+    const chatId = overrideChatId || config.chatId;
+
+    if (!token || !chatId) {
+      return { success: false, error: "رمز البوت أو معرف المحادثة غير مضبوط." };
+    }
+
+    try {
+      const url = `https://api.telegram.org/bot${token}/editMessageText`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+          text: messageHtml,
+          parse_mode: "HTML",
+          disable_web_page_preview: true,
+        }),
+      });
+
+      const resData = await response.json();
+      if (!response.ok || !resData.ok) {
+        // If content is unmodified, Telegram returns 400 with "message is not modified" - perfectly acceptable
+        if (resData.description?.includes("message is not modified")) {
+          return { success: true };
+        }
+        return { success: false, error: resData.description || `HTTP ${response.status}` };
+      }
+
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || "تعذر تعديل الرسالة في تليقرام" };
     }
   }
 
@@ -618,6 +694,243 @@ ${topRec ? `<b>${topRec.title}:</b> ${topRec.subtitle}` : "تثبيت موعد �
   }
 
   /**
+   * Renders a high-tech visual score dominance bar for the live battle HUD.
+   */
+  private static renderScoreDominanceBar(t1: number, t2: number): string {
+    const total = t1 + t2;
+    if (total === 0) {
+      return "📊 <b>مؤشر السيطرة:</b> [▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️] 50% vs 50%";
+    }
+    const t1Ratio = t1 / total;
+    const t1Blocks = Math.min(10, Math.max(0, Math.round(t1Ratio * 10)));
+    const t2Blocks = 10 - t1Blocks;
+    const t1Pct = Math.round(t1Ratio * 100);
+    const t2Pct = 100 - t1Pct;
+
+    const bar = "🟩".repeat(t1Blocks) + "🟥".repeat(t2Blocks);
+    return `📊 <b>مؤشر السيطرة:</b> [${bar}] ${t1Pct}% vs ${t2Pct}%`;
+  }
+
+  /**
+   * Formats the real-time live battle scoreboard HTML for Telegram.
+   */
+  private static formatLiveBattleMessage(data: BattleScorePayload): string {
+    const t1Names = data.team1Members.length > 0 ? data.team1Members.join(" & ") : "مهـرة 🇸🇦";
+    const t2Names = data.team2Members.length > 0 ? data.team2Members.join(" & ") : "المنافس ⚔️";
+    const diff = data.team1Score - data.team2Score;
+    const absDiff = Math.abs(diff).toLocaleString();
+
+    let diffText = "تعادل تام ⚖️";
+    let statusText = "⚪ تعادل في النقاط حتى الآن";
+    if (diff > 0) {
+      diffText = `+${absDiff} لصالح فريق المضيف 🟢`;
+      statusText = "🟢 تفوق وسيطرة لفريق المضيف";
+    } else if (diff < 0) {
+      diffText = `-${absDiff} لصالح المنافس 🔴`;
+      statusText = "🔴 تقدم مؤقت لفريق المنافس";
+    }
+
+    const timeStr = new Date().toLocaleTimeString("ar-SA", {
+      timeZone: "Asia/Riyadh",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+
+    const dominance = this.renderScoreDominanceBar(data.team1Score, data.team2Score);
+
+    return `⚔️ <b>[غرفة النزالات والمنافسات — سكور الجولة المباشر]</b> ⚡
+🏆 نوع النزال: <b>${data.battleType === "2V2" ? "جولة ثنائية 2v2" : "نزال فردي 1v1"}</b>
+━━━━━━━━━━━━━━━━━━━━
+🔴 <b>فريق المضيف (${t1Names}):</b>
+↳ <b>${data.team1Score.toLocaleString()}</b> نقطة 💎
+🔵 <b>فريق المنافس (${t2Names}):</b>
+↳ <b>${data.team2Score.toLocaleString()}</b> نقطة 💎
+━━━━━━━━━━━━━━━━━━━━
+${dominance}
+⚖️ <b>الفارق:</b> ${diffText}
+🛡️ <b>الحالة الميدانية:</b> ${statusText}
+🕒 <b>توقيت التحديث:</b> ${timeStr} بتوقيت الرياض
+━━━━━━━━━━━━━━━━━━━━
+⏳ <i>يتم تحديث السكور لحظياً مع كل نقطة حتى نهاية الجولة...</i>`;
+  }
+
+  /**
+   * 5. Alert: تنبيهات ونتائج جولات النزالات والمنافسات (Live Battle Scores)
+   * Sends initial score card or dynamically edits message in-place on each score change.
+   */
+  static async sendOrUpdateBattleScore(
+    tenantId: string,
+    data: BattleScorePayload
+  ): Promise<{ success: boolean; messageId?: number; error?: string }> {
+    const config = await this.getConfig(tenantId);
+    if (!config.isEnabled || !config.alertBattleScores) {
+      return { success: false, error: "تنبيهات سكور النزالات معطلة في الإعدادات." };
+    }
+
+    const tracker = activeBattleTrackers.get(data.battleId);
+    const msgHtml = this.formatLiveBattleMessage(data);
+
+    // Initial message for this round
+    if (!tracker) {
+      const res = await this.sendMessage(tenantId, "BATTLE_SCORE", msgHtml, {
+        battleId: data.battleId,
+        battleType: data.battleType,
+        t1: data.team1Score,
+        t2: data.team2Score,
+      });
+
+      if (res.success && res.messageId) {
+        activeBattleTrackers.set(data.battleId, {
+          messageId: res.messageId,
+          lastSentTime: Date.now(),
+          lastT1: data.team1Score,
+          lastT2: data.team2Score,
+        });
+      }
+      return res;
+    }
+
+    // Unchanged score
+    if (data.team1Score === tracker.lastT1 && data.team2Score === tracker.lastT2 && !data.isFinal) {
+      return { success: true, messageId: tracker.messageId };
+    }
+
+    // Throttling to respect Telegram Bot API limits (approx. 1 request per 1.8s)
+    const now = Date.now();
+    const timeSinceLast = now - tracker.lastSentTime;
+
+    if (timeSinceLast >= 1800 || data.isFinal) {
+      if (tracker.pendingTimer) {
+        clearTimeout(tracker.pendingTimer);
+        tracker.pendingTimer = null;
+      }
+      tracker.lastSentTime = now;
+      tracker.lastT1 = data.team1Score;
+      tracker.lastT2 = data.team2Score;
+      tracker.lastPayload = undefined;
+
+      const editRes = await this.editMessage(tenantId, tracker.messageId, msgHtml);
+      return { success: editRes.success, messageId: tracker.messageId, error: editRes.error };
+    } else {
+      tracker.lastPayload = data;
+      if (!tracker.pendingTimer) {
+        tracker.pendingTimer = setTimeout(async () => {
+          const latestTracker = activeBattleTrackers.get(data.battleId);
+          if (latestTracker && latestTracker.lastPayload) {
+            const p = latestTracker.lastPayload;
+            latestTracker.pendingTimer = null;
+            latestTracker.lastSentTime = Date.now();
+            latestTracker.lastT1 = p.team1Score;
+            latestTracker.lastT2 = p.team2Score;
+            latestTracker.lastPayload = undefined;
+            const updatedHtml = TelegramService.formatLiveBattleMessage(p);
+            await TelegramService.editMessage(tenantId, latestTracker.messageId, updatedHtml).catch(() => {});
+          }
+        }, 1800 - timeSinceLast);
+      }
+      return { success: true, messageId: tracker.messageId };
+    }
+  }
+
+  /**
+   * Finalizes round and sends victory/outcome alert card upon round completion.
+   */
+  static async sendBattleEndAlert(
+    tenantId: string,
+    battleData: {
+      battleId: string;
+      battleType: "1V1" | "2V2";
+      team1Score: number;
+      team2Score: number;
+      team1Members: string[];
+      team2Members: string[];
+      winningTeam: number | null;
+      durationSeconds?: number;
+    }
+  ): Promise<{ success: boolean; error?: string }> {
+    const config = await this.getConfig(tenantId);
+    if (!config.isEnabled || !config.alertBattleScores) {
+      return { success: false, error: "تنبيهات سكور النزالات معطلة في الإعدادات." };
+    }
+
+    const tracker = activeBattleTrackers.get(battleData.battleId);
+    if (tracker?.pendingTimer) {
+      clearTimeout(tracker.pendingTimer);
+      tracker.pendingTimer = null;
+    }
+
+    const t1Names = battleData.team1Members.length > 0 ? battleData.team1Members.join(" & ") : "مهـرة 🇸🇦";
+    const t2Names = battleData.team2Members.length > 0 ? battleData.team2Members.join(" & ") : "المنافس ⚔️";
+
+    const diff = battleData.team1Score - battleData.team2Score;
+    const absDiff = Math.abs(diff).toLocaleString();
+
+    let outcomeBanner = "⚖️ <b>النتيجة: تعادل مشرف بين الفريقين!</b>";
+    let winnerLabel = "تعادل 🤝";
+    if (battleData.team1Score > battleData.team2Score) {
+      outcomeBanner = "🎉 <b>انتصار ساحق لفريق المضيف! 👑</b>";
+      winnerLabel = `فريق المضيف (${t1Names}) 🏆`;
+    } else if (battleData.team2Score > battleData.team1Score) {
+      outcomeBanner = "🔥 <b>فوز فريق المنافس بالجولة! ⚔️</b>";
+      winnerLabel = `فريق المنافس (${t2Names}) 🛡️`;
+    }
+
+    const durationMin = battleData.durationSeconds ? Math.floor(battleData.durationSeconds / 60) : 5;
+    const durationSec = battleData.durationSeconds ? battleData.durationSeconds % 60 : 0;
+    const durationText = `${durationMin} دقيقة ${durationSec > 0 ? `و ${durationSec} ثانية` : ""}`;
+
+    const timeStr = new Date().toLocaleTimeString("ar-SA", {
+      timeZone: "Asia/Riyadh",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+
+    // 1. Edit the in-progress message to final completed state
+    if (tracker) {
+      const completedLiveHtml = `🏁 <b>[جولة النزال مكتملة — السكور النهائي الرسمي]</b> ✅
+🏆 نوع النزال: <b>${battleData.battleType === "2V2" ? "جولة ثنائية 2v2" : "نزال فردي 1v1"}</b>
+━━━━━━━━━━━━━━━━━━━━
+🔴 <b>فريق المضيف (${t1Names}):</b>
+↳ <b>${battleData.team1Score.toLocaleString()}</b> نقطة
+🔵 <b>فريق المنافس (${t2Names}):</b>
+↳ <b>${battleData.team2Score.toLocaleString()}</b> نقطة
+━━━━━━━━━━━━━━━━━━━━
+👑 <b>الفائز الرسمي:</b> <b>${winnerLabel}</b>
+🎯 <b>فارق الحسم:</b> ${absDiff} نقطة
+⏱️ <b>مدة الجولة:</b> ${durationText}
+━━━━━━━━━━━━━━━━━━━━
+✅ <i>انتهت الجولة وتم توثيق النتيجة في السجل.</i>`;
+
+      await this.editMessage(tenantId, tracker.messageId, completedLiveHtml).catch(() => {});
+      activeBattleTrackers.delete(battleData.battleId);
+    }
+
+    // 2. Dispatch the final victory notification card
+    const finalCardHtml = `🏆 <b>[النتيجة النهائية لجولة النزال — ختام الجولة]</b> 🏁
+━━━━━━━━━━━━━━━━━━━━
+${outcomeBanner}
+🔴 <b>فريق المضيف (${t1Names}):</b> <b>${battleData.team1Score.toLocaleString()}</b> نقطة 💎
+🔵 <b>فريق المنافس (${t2Names}):</b> <b>${battleData.team2Score.toLocaleString()}</b> نقطة 💎
+━━━━━━━━━━━━━━━━━━━━
+👑 <b>حسم الجولة:</b> <b>${winnerLabel}</b>
+🎯 <b>فارق النقاط النهائي:</b> ${absDiff} نقطة
+⏱️ <b>مدة الجولة:</b> ${durationText}
+🕒 <b>توقيت الحسم:</b> ${timeStr} بتوقيت الرياض
+━━━━━━━━━━━━━━━━━━━━
+🌟 <i>تهانينا لجميع الداعمين والمشاركين في الميدان!</i>`;
+
+    return await this.sendMessage(tenantId, "BATTLE_END", finalCardHtml, {
+      battleId: battleData.battleId,
+      winner: winnerLabel,
+      team1Score: battleData.team1Score,
+      team2Score: battleData.team2Score,
+      diff,
+    });
+  }
+
+  /**
    * Sends connection ping test message to verify Bot Token and Chat ID.
    */
   static async testConnection(
@@ -663,7 +976,8 @@ ${topRec ? `<b>${topRec.title}:</b> ${topRec.subtitle}` : "تثبيت موعد �
 1️⃣ 👑 تنبيه دخول كبار الداعمين (VIP Entry)
 2️⃣ 🎭 تنبيه كشف قناع أنيقما (Enigma Unmasked)
 3️⃣ 🏆 التقرير اليومي لصدارة أبطال المجتمع
-4️⃣ ⏱️ التقرير اليومي لمؤشر جودة وقت البث (STQI)`;
+4️⃣ ⏱️ التقرير اليومي لمؤشر جودة وقت البث (STQI)
+5️⃣ ⚔️ متابعة ونتائج سكور النزالات لحظياً (Live Battle Scores)`;
 
       const sendRes = await this.sendMessage(tenantId, "TEST", testMsg, { botName }, token, chatId);
       if (!sendRes.success) {
@@ -677,11 +991,11 @@ ${topRec ? `<b>${topRec.title}:</b> ${topRec.subtitle}` : "تثبيت موعد �
   }
 
   /**
-   * Dispatches realistic mock or live data for any of the 4 alert types for on-demand user verification.
+   * Dispatches realistic mock or live data for any of the alert types for on-demand user verification.
    */
   static async testSpecificAlert(
     tenantId: string,
-    action: "ping" | "test_vip" | "test_enigma" | "send_daily_champions" | "send_daily_stqi"
+    action: "ping" | "test_vip" | "test_enigma" | "send_daily_champions" | "send_daily_stqi" | "test_battle_score" | "test_battle_end"
   ): Promise<{ success: boolean; error?: string; messageId?: number }> {
     if (action === "ping") {
       const res = await this.testConnection(tenantId);
@@ -720,6 +1034,30 @@ ${topRec ? `<b>${topRec.title}:</b> ${topRec.subtitle}` : "تثبيت موعد �
 
     if (action === "send_daily_stqi") {
       return await this.sendDailyStqiAlert(tenantId);
+    }
+
+    if (action === "test_battle_score") {
+      return await this.sendOrUpdateBattleScore(tenantId, {
+        battleId: "test_battle_" + Date.now(),
+        battleType: "2V2",
+        team1Score: 18450,
+        team2Score: 14200,
+        team1Members: ["مهـرة 🇸🇦", "سارة ✨"],
+        team2Members: ["الذئب 🐺", "فارس الظلام ⚔️"],
+      });
+    }
+
+    if (action === "test_battle_end") {
+      return await this.sendBattleEndAlert(tenantId, {
+        battleId: "test_battle_end_" + Date.now(),
+        battleType: "2V2",
+        team1Score: 35800,
+        team2Score: 29400,
+        team1Members: ["مهـرة 🇸🇦", "سارة ✨"],
+        team2Members: ["الذئب 🐺", "فارس الظلام ⚔️"],
+        winningTeam: 1,
+        durationSeconds: 300,
+      });
     }
 
     return { success: false, error: "نوع التنبيه غير معروف." };

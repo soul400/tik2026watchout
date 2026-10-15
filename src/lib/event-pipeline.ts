@@ -409,6 +409,41 @@ export class LiveEventPipeline {
           where: { id: battleId, tenantId: this.tenantId },
           data: { status: "COMPLETED", endedAt: new Date() },
         });
+
+        // Trigger Telegram Battle Final Alert
+        try {
+          const finishedBattle = await prisma.battle.findUnique({
+            where: { id: battleId },
+            include: { participants: true },
+          });
+          if (finishedBattle) {
+            const winner =
+              finishedBattle.team1Score > finishedBattle.team2Score
+                ? 1
+                : finishedBattle.team2Score > finishedBattle.team1Score
+                ? 2
+                : null;
+
+            await TelegramService.sendBattleEndAlert(this.tenantId, {
+              battleId: finishedBattle.id,
+              battleType: finishedBattle.battleType as "1V1" | "2V2",
+              team1Score: finishedBattle.team1Score,
+              team2Score: finishedBattle.team2Score,
+              team1Members: finishedBattle.participants
+                .filter((p) => p.teamNumber === 1)
+                .map((p) => p.displayName || p.username),
+              team2Members: finishedBattle.participants
+                .filter((p) => p.teamNumber === 2)
+                .map((p) => p.displayName || p.username),
+              winningTeam: winner,
+              durationSeconds:
+                finishedBattle.durationSeconds ||
+                Math.round((Date.now() - new Date(finishedBattle.startedAt).getTime()) / 1000),
+            });
+          }
+        } catch (alertErr) {
+          console.error("[TELEGRAM_BATTLE_END_ALERT_ERROR]", alertErr);
+        }
         return;
       }
 
@@ -657,6 +692,20 @@ export class LiveEventPipeline {
             },
           },
         });
+
+        // Trigger initial Telegram Battle Score Board
+        TelegramService.sendOrUpdateBattleScore(this.tenantId, {
+          battleId,
+          battleType: participantsData.length > 2 ? "2V2" : "1V1",
+          team1Score: 0,
+          team2Score: 0,
+          team1Members: participantsData
+            .filter((p) => p.teamNumber === 1)
+            .map((p) => p.displayName || p.username),
+          team2Members: participantsData
+            .filter((p) => p.teamNumber === 2)
+            .map((p) => p.displayName || p.username),
+        }).catch((err) => console.error("[TELEGRAM_BATTLE_START_ERROR]", err));
       }
 
       this.stats.processedCount++;
@@ -723,6 +772,20 @@ export class LiveEventPipeline {
           `Matched T1: [${resolution.diagnostics.matchedAnchorsTeam1.join(",") || "none"}] | ` +
           `Matched T2: [${resolution.diagnostics.matchedAnchorsTeam2.join(",") || "none"}]`
         );
+
+        // Live Telegram Score Update (throttled & in-place live edit)
+        TelegramService.sendOrUpdateBattleScore(this.tenantId, {
+          battleId: battle.id,
+          battleType: battle.battleType as "1V1" | "2V2",
+          team1Score: resolution.team1Score,
+          team2Score: resolution.team2Score,
+          team1Members: battle.participants
+            .filter((p) => p.teamNumber === 1)
+            .map((p) => p.displayName || p.username),
+          team2Members: battle.participants
+            .filter((p) => p.teamNumber === 2)
+            .map((p) => p.displayName || p.username),
+        }).catch((err) => console.error("[TELEGRAM_BATTLE_SCORE_UPDATE_ERROR]", err));
       }
 
       this.stats.processedCount++;

@@ -37,6 +37,7 @@ interface TelegramConfig {
   alertEnigmaUnmasked: boolean;
   alertDailyChampions: boolean;
   alertDailyStqi: boolean;
+  alertBattleScores: boolean;
   lastDailyChampionsAt?: string | null;
   lastDailyStqiAt?: string | null;
 }
@@ -78,6 +79,7 @@ export function TelegramSettingsHub() {
   const [alertEnigmaUnmasked, setAlertEnigmaUnmasked] = useState(true);
   const [alertDailyChampions, setAlertDailyChampions] = useState(true);
   const [alertDailyStqi, setAlertDailyStqi] = useState(true);
+  const [alertBattleScores, setAlertBattleScores] = useState(true);
 
   // Fetch initial data
   const fetchData = async () => {
@@ -95,6 +97,7 @@ export function TelegramSettingsHub() {
         setAlertEnigmaUnmasked(data.config.alertEnigmaUnmasked);
         setAlertDailyChampions(data.config.alertDailyChampions);
         setAlertDailyStqi(data.config.alertDailyStqi);
+        setAlertBattleScores(data.config.alertBattleScores ?? true);
         setLogs(data.recentLogs || []);
         setStats(data.stats || { totalSent: 0, totalFailed: 0 });
       }
@@ -126,6 +129,7 @@ export function TelegramSettingsHub() {
           alertEnigmaUnmasked,
           alertDailyChampions,
           alertDailyStqi,
+          alertBattleScores,
         }),
       });
       const data = await res.json();
@@ -144,7 +148,7 @@ export function TelegramSettingsHub() {
 
   // Run test action
   const handleTestAction = async (
-    action: "ping" | "test_vip" | "test_enigma" | "send_daily_champions" | "send_daily_stqi"
+    action: "ping" | "test_vip" | "test_enigma" | "send_daily_champions" | "send_daily_stqi" | "test_battle_score"
   ) => {
     setTestingAction(action);
     setFeedback(null);
@@ -524,12 +528,12 @@ export function TelegramSettingsHub() {
           </div>
         </div>
 
-        {/* 3. THE 4 SPECIALIZED ALERT CHANNELS (Right Column - 7 cols) */}
+        {/* 3. THE 5 SPECIALIZED ALERT CHANNELS (Right Column - 7 cols) */}
         <div className="lg:col-span-7 cyber-card p-6 rounded-3xl border border-white/10 space-y-5">
           <div className="flex items-center justify-between pb-3 border-b border-white/5">
             <div className="flex items-center gap-2">
               <BellRing className="w-5 h-5 text-gold" />
-              <h4 className="text-base font-bold text-white">قنوات التنبيهات الأربعة المطلوبة</h4>
+              <h4 className="text-base font-bold text-white">قنوات التنبيهات المباشرة (5 قنوات ذكية)</h4>
             </div>
             <span className="text-[11px] text-secondaryText">تخصيص واختبار مباشر</span>
           </div>
@@ -726,6 +730,53 @@ export function TelegramSettingsHub() {
                     {testingAction === "send_daily_stqi"
                       ? "جاري الإرسال..."
                       : "إرسال تقرير STQI الآن"}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Channel 5: Live Battle Scores & Outcomes */}
+            <div className="bg-background/90 p-4 rounded-2xl border border-white/5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-rose-500/15 text-rose-400 border border-rose-500/30 flex items-center justify-center">
+                    ⚔️
+                  </div>
+                  <div>
+                    <h5 className="text-sm font-bold text-white">
+                      5. تنبيهات ونتائج جولات النزالات والمنافسات (Live Battle Scores)
+                    </h5>
+                    <p className="text-[11px] text-secondaryText">
+                      إرسال وتحديث السكور لحظياً مع كل نقطة طوال الجولة حتى نهايتها، مع رسالة ختامية للنتيجة الرسمية.
+                    </p>
+                  </div>
+                </div>
+
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={alertBattleScores}
+                    onChange={(e) => setAlertBattleScores(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-10 h-5 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-rose-500"></div>
+                </label>
+              </div>
+
+              <div className="pt-2 border-t border-white/5 flex items-center justify-between text-xs">
+                <span className="text-secondaryText text-[11px]">
+                  تحديث فوري ذكي (Live In-Place Edit) لمنع إغراق المحادثة وحسم النتيجة بنهاية الجولة.
+                </span>
+                <button
+                  onClick={() => handleTestAction("test_battle_score")}
+                  disabled={testingAction === "test_battle_score" || !isConfigured}
+                  className="px-3 py-1.5 rounded-lg bg-rose-500/15 text-rose-400 border border-rose-500/30 font-bold hover:bg-rose-500/25 transition-all flex items-center justify-center gap-1.5 disabled:opacity-40"
+                >
+                  <Play className="w-3 h-3 fill-rose-400" />
+                  <span>
+                    {testingAction === "test_battle_score"
+                      ? "جاري الإرسال..."
+                      : "تجربة سكور النزال ⚔️"}
                   </span>
                 </button>
               </div>

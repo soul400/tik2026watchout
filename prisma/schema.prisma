@@ -438,6 +438,7 @@ model TelegramConfig {
   alertEnigmaUnmasked   Boolean   @default(true)
   alertDailyChampions   Boolean   @default(true)
   alertDailyStqi        Boolean   @default(true)
+  alertBattleScores     Boolean   @default(true)
   lastDailyChampionsAt  DateTime?
   lastDailyStqiAt       DateTime?
   createdAt             DateTime  @default(now())

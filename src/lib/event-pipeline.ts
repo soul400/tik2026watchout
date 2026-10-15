@@ -346,7 +346,8 @@ export class LiveEventPipeline {
   }
 
   private async checkAndTriggerVipAlert(platformUserId: string, username: string, displayName: string): Promise<void> {
-    if (!platformUserId || platformUserId.startsWith("guest_") || this.sessionVipAlertsSent.has(platformUserId)) {
+    const supporterKey = platformUserId || username;
+    if (!supporterKey || supporterKey.startsWith("guest_") || this.sessionVipAlertsSent.has(supporterKey)) {
       return;
     }
 
@@ -356,17 +357,25 @@ export class LiveEventPipeline {
         return;
       }
 
-      const supporter = await prisma.supporter.findUnique({
+      // Match by platformUserId OR username to guarantee VIP detection on join
+      const supporter = await prisma.supporter.findFirst({
         where: {
-          tenantId_platformUserId: {
-            tenantId: this.tenantId,
-            platformUserId,
-          },
+          tenantId: this.tenantId,
+          OR: [
+            ...(platformUserId ? [{ platformUserId }] : []),
+            ...(username && username !== "user" ? [{ username }] : []),
+          ],
         },
       });
 
       if (supporter && supporter.totalDiamonds >= config.vipDiamondsThreshold) {
-        this.sessionVipAlertsSent.add(platformUserId);
+        this.sessionVipAlertsSent.add(supporterKey);
+        if (supporter.platformUserId) this.sessionVipAlertsSent.add(supporter.platformUserId);
+        if (supporter.username) this.sessionVipAlertsSent.add(supporter.username);
+
+        console.log(
+          `[LIVE VIP ENTRANCE] 👑 VIP Supporter @${supporter.username} (${supporter.totalDiamonds.toLocaleString()} 💎) entered! Sending Telegram alert...`
+        );
         await TelegramService.sendVipEntryAlert(this.tenantId, supporter).catch(() => {});
       }
     } catch {

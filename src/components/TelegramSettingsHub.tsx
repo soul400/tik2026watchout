@@ -372,6 +372,16 @@ export function TelegramSettingsHub() {
               لربط حسابك <strong>@{targetTelegramUsername}</strong>: افتح البوت في تليقرام واضغط <strong>Start</strong> أو أرسل أي كلمة، ثم اضغط الزر أدناه ليقوم النظام بالتقاط معرفك وربطه تلقائياً!
             </p>
 
+            <a
+              href="https://t.me/mohra_pulse_bot"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="py-2 px-3 rounded-xl bg-gold/15 hover:bg-gold/25 border border-gold/30 text-gold text-xs font-bold transition-all flex items-center justify-center gap-2"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>الخطوة 1: اضغط هنا لفتح بوتك (@mohra_pulse_bot) واضغط Start</span>
+            </a>
+
             <button
               type="button"
               onClick={async () => {

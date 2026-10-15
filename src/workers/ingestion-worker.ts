@@ -103,6 +103,11 @@ async function runWorker() {
     console.log(`[LIVE LIKE] ❤️ @${actor} sent ${count} likes`);
   });
 
+  adapter.on("member", (data: any) => {
+    const actor = data.user?.displayId || data.uniqueId || data.user?.nickname || "viewer";
+    console.log(`[LIVE VIEWER JOIN] 🚪 @${actor} joined the live stream`);
+  });
+
   adapter.on("linkMicBattle", (data: any) => {
     console.log(`[LIVE BATTLE] ⚔️ Battle Event: ID ${data.battleId || "round"}`);
   });

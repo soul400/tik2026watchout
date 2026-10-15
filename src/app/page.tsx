@@ -23,6 +23,8 @@ import {
 
 import { StreamerHudHeader } from "@/components/StreamerHudHeader";
 import { SupportValue } from "@/components/SupportValue";
+import { LiveStreamSupportersTable } from "@/components/LiveStreamSupportersTable";
+import { LiveStreamSupportersService } from "@/lib/live-supporters-service";
 
 export const dynamic = "force-dynamic";
 
@@ -42,11 +44,7 @@ export default async function DashboardPage() {
 
   const supportersCount = await prisma.supporter.count({ where: { tenantId } });
   const activeBattles = await prisma.battle.count({ where: { tenantId, status: "IN_PROGRESS" } });
-  const topSupporters = await prisma.supporter.findMany({
-    where: { tenantId },
-    orderBy: { totalDiamonds: "desc" },
-    take: 6,
-  });
+  const liveSupportersData = await LiveStreamSupportersService.getCurrentLiveSupporters(tenantId, 50);
 
   const { SmartInventoryService } = await import("@/lib/smart-inventory");
   const inventoryCounters = await SmartInventoryService.getInventoryCounters(tenantId);
@@ -149,88 +147,9 @@ export default async function DashboardPage() {
       </div>
 
       {/* ============================================================== */}
-      {/* 3. HIGH-TECH DIGI-DESIGN TABLE: جدول شرف الداعمين بطريقة ديجيتال كاملة */}
+      {/* 3. LIVE STREAM SUPPORTERS BOARD: لوحة داعمين البث الحية تتجدد مع كل بث */}
       {/* ============================================================== */}
-      <div className="hud-deck rounded-2xl p-6 md:p-8">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-4 border-b border-turquoise/20">
-          <div>
-            <h3 className="text-xl font-black text-white flex items-center gap-3">
-              <TrendingUp className="w-5 h-5 text-turquoise" />
-              لوحة شرف الداعمين التكتيكيين (Digital Leaderboard)
-            </h3>
-            <p className="text-xs text-secondaryText mt-1">
-              ترتيب فوري ودقيق مستند حصراً إلى أحداث الدعم الماسي والهدايا المسجلة في خوادم النظام
-            </p>
-          </div>
-          <ConfidenceBadge state="VERIFIED" methodology="مطابق 100% لسجلات المعاملات في قاعدة البيانات" />
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="digi-table">
-            <thead>
-              <tr>
-                <th className="pr-4">الترتيب والداعم</th>
-                <th>التصنيف السلوكي</th>
-                <th className="text-center">إجمالي الماس 💎</th>
-                <th className="text-center">التكبيس</th>
-                <th className="text-center">التعليقات</th>
-                <th className="text-center">مستوى الثقة</th>
-              </tr>
-            </thead>
-            <tbody>
-              {topSupporters.map((sup, idx) => (
-                <tr key={sup.id}>
-                  <td className="pr-4 flex items-center gap-3.5">
-                    <span
-                      className={`w-8 h-8 rounded-xl flex items-center justify-center font-mono font-bold text-xs ${
-                        idx === 0
-                          ? "bg-turquoise text-background font-black shadow-lg shadow-turquoise/30"
-                          : idx === 1
-                          ? "bg-slate-200 text-background font-black"
-                          : idx === 2
-                          ? "bg-amber-800 text-white font-black"
-                          : "bg-elevated text-secondaryText"
-                      }`}
-                    >
-                      #{idx + 1}
-                    </span>
-                    <div className="w-10 h-10 rounded-xl bg-elevated border border-turquoise/35 flex items-center justify-center font-bold text-turquoise text-base shadow-inner">
-                      {sup.displayName.charAt(0)}
-                    </div>
-                    <div>
-                      <p className="font-bold text-white text-base">{sup.displayName}</p>
-                      <p className="text-xs text-secondaryText font-mono">@{sup.username}</p>
-                    </div>
-                  </td>
-                  <td>
-                    <span className="text-xs px-2.5 py-1 rounded-md font-semibold bg-turquoise/10 text-turquoise border border-turquoise/25">
-                      {sup.category === "CONTINUOUS"
-                        ? "داعم مستمر"
-                        : sup.category === "BATTLE_PARTICIPANT"
-                        ? "مشارك جولات"
-                        : "متفاعل نشط"}
-                    </span>
-                  </td>
-                  <td className="text-center font-mono font-black text-gold text-lg">
-                    <SupportValue value={sup.totalDiamonds} suffix=" 💎" />
-                  </td>
-                  <td className="text-center font-mono font-bold text-turquoise">
-                    {sup.totalLikes.toLocaleString()}
-                  </td>
-                  <td className="text-center font-mono font-bold text-white">
-                    {sup.totalComments.toLocaleString()}
-                  </td>
-                  <td className="text-center">
-                    <span className="px-2.5 py-0.5 rounded text-[11px] font-mono font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30">
-                      VERIFIED
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <LiveStreamSupportersTable initialData={liveSupportersData} tenantId={tenantId} />
 
       {/* ============================================================== */}
       {/* 4. UNDER TABLE: سجل موثوقية المقاييس (Full Width Digi Pod) */}

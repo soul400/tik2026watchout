@@ -226,18 +226,54 @@ export class StreamHealthService {
     };
 
     // Telegram Alerts status
-    let telegramStatus: ComponentHealthStatus = {
-      status: "HEALTHY",
-      message: "قناة التنبيهات معدة وجاهزة للإرسال",
-      lastChecked: now,
-    };
+    let telegramStatus: ComponentHealthStatus;
+    const envBotToken = process.env.TELEGRAM_BOT_TOKEN;
+    const envChatId = process.env.TELEGRAM_CHAT_ID;
+
     if (tenantId) {
       const tgConfig = await prisma.telegramConfig.findUnique({ where: { tenantId } });
-      if (!tgConfig || !tgConfig.isEnabled) {
+      const hasToken = !!(tgConfig?.botToken || envBotToken);
+      const hasChat = !!(tgConfig?.chatId || envChatId);
+      const isEnabled = tgConfig ? tgConfig.isEnabled : !!(hasToken && hasChat);
+
+      if (!hasToken || !hasChat) {
         telegramStatus = {
           status: "DEGRADED",
-          message: "تنبيهات تيليجرام معطلة أو لم يتم تعيين معرف القناة",
+          message: "تنبيهات تيليجرام غير مهيأة (رمز البوت أو معرف القناة مفقود)",
           lastChecked: now,
+          details: { hasToken, hasChat, isEnabled },
+        };
+      } else if (!isEnabled) {
+        telegramStatus = {
+          status: "DEGRADED",
+          message: "تنبيهات تيليجرام مهيأة ولكنها معطلة",
+          lastChecked: now,
+          details: { hasToken, hasChat, isEnabled: false },
+        };
+      } else {
+        telegramStatus = {
+          status: "HEALTHY",
+          message: "قناة التنبيهات معدة وجاهزة للإرسال",
+          lastChecked: now,
+          details: { hasToken: true, hasChat: true, isEnabled: true },
+        };
+      }
+    } else {
+      const hasToken = !!envBotToken;
+      const hasChat = !!envChatId;
+      if (!hasToken || !hasChat) {
+        telegramStatus = {
+          status: "DEGRADED",
+          message: "تنبيهات تيليجرام غير مهيأة (رمز البوت أو معرف القناة مفقود)",
+          lastChecked: now,
+          details: { hasToken, hasChat, isEnabled: false },
+        };
+      } else {
+        telegramStatus = {
+          status: "HEALTHY",
+          message: "قناة التنبيهات معدة وجاهزة للإرسال",
+          lastChecked: now,
+          details: { hasToken: true, hasChat: true, isEnabled: true },
         };
       }
     }

@@ -78,8 +78,22 @@ export class SmartInventoryService {
   /**
    * Ensures that all canonical tools exist for the given tenant.
    * This guarantees that even tools with zero inventory appear in the UI with accurate 0 counters.
+   * Strictly validates tenantId and verifies tenant existence before attempting any database writes.
    */
-  static async ensureCanonicalDefinitions(tenantId: string) {
+  static async ensureCanonicalDefinitions(tenantId: string): Promise<boolean> {
+    if (!tenantId || typeof tenantId !== "string" || tenantId.trim() === "") {
+      return false;
+    }
+
+    const tenantExists = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true },
+    });
+
+    if (!tenantExists) {
+      return false;
+    }
+
     const upsertPromises = Object.entries(CANONICAL_TOOL_DEFINITIONS).map(([key, meta]) => {
       return prisma.toolDefinition.upsert({
         where: {
@@ -108,6 +122,7 @@ export class SmartInventoryService {
     });
 
     await Promise.all(upsertPromises);
+    return true;
   }
 
   /**
@@ -116,6 +131,19 @@ export class SmartInventoryService {
    */
   static async grantTool(params: ToolGrantParams) {
     const { tenantId, supporterId, toolKey, quantity, battleId, sourceEventId, auditReference } = params;
+
+    // 0. Strict tenant validation: Reject empty or invalid tenant IDs
+    if (!tenantId || typeof tenantId !== "string" || tenantId.trim() === "") {
+      return { success: false, reason: "INVALID_TENANT_ID" };
+    }
+
+    const tenantExists = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true },
+    });
+    if (!tenantExists) {
+      return { success: false, reason: "TENANT_NOT_FOUND" };
+    }
 
     // 1. Strict validation: Reject unknown tool keys
     if (!toolKey || !CANONICAL_TOOL_DEFINITIONS[toolKey]) {
@@ -233,6 +261,19 @@ export class SmartInventoryService {
       isQuarantined = false,
       quarantineReason,
     } = params;
+
+    // Strict tenant validation: Reject empty or invalid tenant IDs
+    if (!tenantId || typeof tenantId !== "string" || tenantId.trim() === "") {
+      return { success: false, reason: "INVALID_TENANT_ID", updatedGrant: null, consumption: null };
+    }
+
+    const tenantExists = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true },
+    });
+    if (!tenantExists) {
+      return { success: false, reason: "TENANT_NOT_FOUND", updatedGrant: null, consumption: null };
+    }
 
     // 0. Quarantine Defense: unverified or ambiguous events without idempotency identity
     if (isQuarantined) {
@@ -561,9 +602,43 @@ export class SmartInventoryService {
 
   /**
    * Fetches accurate inventory counters per tool type.
-   * Auto-provisions canonical definitions so 0-inventory tools always display properly.
+   * Auto-provisions canonical definitions for valid tenants so 0-inventory tools always display properly.
+   * Returns empty canonical zero counters safely if tenantId is missing or nonexistent without throwing.
    */
   static async getInventoryCounters(tenantId: string): Promise<InventoryOverview[]> {
+    if (!tenantId || typeof tenantId !== "string" || tenantId.trim() === "") {
+      return Object.entries(CANONICAL_TOOL_DEFINITIONS).map(([key, meta]) => ({
+        toolKey: key,
+        toolName: meta.name,
+        colorHex: meta.color,
+        icon: meta.icon,
+        totalAvailable: 0,
+        totalReceived: 0,
+        totalConsumed: 0,
+        totalExpiringSoon: 0,
+        totalExpired: 0,
+      }));
+    }
+
+    const tenantExists = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true },
+    });
+
+    if (!tenantExists) {
+      return Object.entries(CANONICAL_TOOL_DEFINITIONS).map(([key, meta]) => ({
+        toolKey: key,
+        toolName: meta.name,
+        colorHex: meta.color,
+        icon: meta.icon,
+        totalAvailable: 0,
+        totalReceived: 0,
+        totalConsumed: 0,
+        totalExpiringSoon: 0,
+        totalExpired: 0,
+      }));
+    }
+
     await this.ensureCanonicalDefinitions(tenantId);
 
     const toolDefs = await prisma.toolDefinition.findMany({
@@ -623,6 +698,36 @@ export class SmartInventoryService {
    * Guarantees that any discrepancy between materialized balances and transaction history is detected.
    */
   static async reconcileInventory(tenantId: string): Promise<InventoryReconciliationReport> {
+    if (!tenantId || typeof tenantId !== "string" || tenantId.trim() === "") {
+      return {
+        isReconciled: true,
+        tenantId: tenantId || "",
+        totalGrantsProjected: 0,
+        totalLedgerBalance: 0,
+        netDiscrepancy: 0,
+        perTool: {},
+        movementsCount: 0,
+        reconciledAt: new Date(),
+      };
+    }
+
+    const tenantExists = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true },
+    });
+    if (!tenantExists) {
+      return {
+        isReconciled: true,
+        tenantId,
+        totalGrantsProjected: 0,
+        totalLedgerBalance: 0,
+        netDiscrepancy: 0,
+        perTool: {},
+        movementsCount: 0,
+        reconciledAt: new Date(),
+      };
+    }
+
     const activeGrants = await prisma.toolGrant.findMany({
       where: {
         tenantId,

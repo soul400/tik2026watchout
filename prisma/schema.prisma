@@ -137,6 +137,7 @@ model RawEvent {
   id               String   @id @default(cuid())
   liveSessionId    String
   deduplicationKey String   @unique
+  platformUserId   String?  // normalized platform user id (secUid or uid) for high-performance indexing
   eventType        String   // gift, chat, like, battle, etc.
   sourceTimestamp  DateTime
   receivedAt       DateTime @default(now())
@@ -146,6 +147,7 @@ model RawEvent {
   liveSession LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
 
   @@index([liveSessionId, eventType])
+  @@index([platformUserId])
 }
 
 // -------------------------------------------------------------

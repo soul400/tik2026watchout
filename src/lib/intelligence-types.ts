@@ -86,6 +86,9 @@ export interface ForensicComparisonDTO {
     accountBLastSeen: string;
     sharedSessionsCount: number;
     simultaneousEventCount: number;
+    simultaneousWindowsCount?: number;
+    sessionsWithOverlapCount?: number;
+    observedTemporalOverlap?: boolean;
     overlapDurationMinutes: number;
     overlapPercentage: number;
     potentialHandoverEventsCount: number;

@@ -12,6 +12,7 @@ import {
 import { EnigmaRadarService } from "./enigma-radar-service";
 import { AntiSnipePredictorService } from "./anti-snipe-predictor-service";
 import { EnigmaEngine } from "./enigma-engine";
+import { EvidencePolicyEngine } from "./evidence-policy";
 
 export class IntelligenceLabService {
   /**
@@ -316,14 +317,37 @@ export class IntelligenceLabService {
     tenantId: string,
     caseId: string,
     verdictStatus: VerdictStatus,
-    notes?: string
+    notes?: string,
+    reviewedBy?: string
   ): Promise<boolean> {
-    await prisma.intelligenceInvestigationCase.updateMany({
+    const existingCase = await prisma.intelligenceInvestigationCase.findFirst({
       where: { id: caseId, tenantId },
+    });
+    if (!existingCase) return false;
+
+    let details: Record<string, any> = {};
+    try {
+      details = JSON.parse(existingCase.evidenceDetailsJson || "{}");
+    } catch {}
+
+    const now = new Date();
+    details.isManuallyReviewed = true;
+    details.reviewedBy = reviewedBy || existingCase.assignedTo || "operator";
+    details.reviewedAt = now.toISOString();
+    details.manualVerdict = verdictStatus;
+    details.reviewProvenance = "MANUAL_OPERATOR_REVIEW";
+    if (notes) {
+      details.operatorNotes = notes;
+    }
+
+    await prisma.intelligenceInvestigationCase.update({
+      where: { id: existingCase.id },
       data: {
         verdictStatus,
-        ...(notes ? { notes } : {}),
-        updatedAt: new Date(),
+        assignedTo: reviewedBy || existingCase.assignedTo || "operator",
+        notes: notes ? `${notes} (مراجعة يدوية: ${now.toLocaleDateString("ar-SA")})` : existingCase.notes,
+        evidenceDetailsJson: JSON.stringify(details),
+        updatedAt: now,
       },
     });
     return true;
@@ -523,22 +547,111 @@ export class IntelligenceLabService {
       }
 
       // C. Create Investigation Case for Enigma unmasking
-      const cleanCaseSlug = realUser.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 8).toUpperCase() || "USER";
-      const caseNumber = `CASE-ENIGMA-${cleanCaseSlug}-${pUid.slice(-4)}`;
+      const caseNumber = `CASE-ENIGMA-${pUid}`;
       const existingCase = await prisma.intelligenceInvestigationCase.findFirst({
-        where: { tenantId, caseNumber },
+        where: {
+          tenantId,
+          OR: [
+            { caseNumber },
+            { primaryPlatformUserId: pUid },
+          ],
+        },
       });
 
-      if (!existingCase) {
+      const isVerifiedUid = ev.classification === "IDENTIFIER_MATCH" && Boolean(pUid);
+      const isSparse = (ev.enigmaEventsCount || 0) < 3 && combinedDiamonds === 0;
+
+      let verdictStatus: VerdictStatus = "NEEDS_REVIEW";
+      let similarityScore: number | null = null;
+      let caseTitle = `استطلاع قناع أنيقما: ${enigmaDisplay}`;
+      let evidenceSummary = `حساب مقنع نشط برصيد دعم ${combinedDiamonds.toLocaleString()} ماسة. يتطلب مراجعة استطلاعية لتحديد الحساب الحقيقي المرتبط.`;
+
+      if (isSparse) {
+        verdictStatus = "UNRESOLVED";
+        similarityScore = null;
+        caseTitle = `سجل غير مكتمل: ${enigmaDisplay}`;
+        evidenceSummary = `بيانات تاريخية غير كافية: رصيد الدعم 0 ماسة وعدد الأحداث يقل عن الحد الأدنى المعتمد.`;
+      } else if (isVerifiedUid) {
+        verdictStatus = "VERIFIED_IDENTIFIER_MATCH";
+        similarityScore = 100;
+        caseTitle = `كشف قناع أنيقما: ${enigmaDisplay} ➔ @${realUser}`;
+        evidenceSummary = `تطابق قطعي مثبت رقمياً للمعرف الثابت (SecUID: ${pUid}) بين قناع ${enigmaDisplay} والحساب المعتمد @${realUser} بإجمالي دعم ${combinedDiamonds.toLocaleString()} ماسة.`;
+      }
+
+      if (existingCase) {
+        let details: Record<string, any> = {};
+        try {
+          details = JSON.parse(existingCase.evidenceDetailsJson || "{}");
+        } catch {}
+
+        const isManual =
+          details.isManuallyReviewed === true ||
+          details.reviewProvenance === "MANUAL_OPERATOR_REVIEW" ||
+          existingCase.assignedTo != null ||
+          (Boolean(existingCase.notes) &&
+            !existingCase.notes?.startsWith("تم التحديث بواسطة") &&
+            !existingCase.notes?.startsWith("تم التوثيق بواسطة") &&
+            !existingCase.notes?.startsWith("تمت المزامنة الآلية"));
+
+        if (isManual) {
+          // STRICT MANUAL PRESERVATION: do not overwrite human verdicts, scores, title, or notes!
+          // BUT refresh technical telemetry metrics inside evidenceDetailsJson so data doesn't go stale
+          await prisma.intelligenceInvestigationCase.update({
+            where: { id: existingCase.id },
+            data: {
+              evidenceDetailsJson: JSON.stringify({
+                ...details,
+                totalCombinedDiamonds: combinedDiamonds,
+                diamondsWithEnigma: ev.diamondsWithEnigma,
+                diamondsPublic: ev.diamondsPublic,
+                enigmaEventsCount: ev.enigmaEventsCount,
+                topGifts: ev.topGifts || [],
+                evidencePoints: ev.evidencePoints || [],
+                telemetryLastRefreshedAt: new Date().toISOString(),
+              }),
+            },
+          });
+          syncedCasesCount++;
+          continue;
+        }
+
+        await prisma.intelligenceInvestigationCase.update({
+          where: { id: existingCase.id },
+          data: {
+            caseNumber,
+            title: caseTitle,
+            verdictStatus,
+            similarityScore,
+            evidenceSummary,
+            evidenceDetailsJson: JSON.stringify({
+              ...details,
+              enigmaUsername: enigmaUser,
+              enigmaDisplayName: enigmaDisplay,
+              realUsername: realUser,
+              realDisplayName: realDisplay,
+              totalCombinedDiamonds: combinedDiamonds,
+              diamondsWithEnigma: ev.diamondsWithEnigma,
+              diamondsPublic: ev.diamondsPublic,
+              enigmaEventsCount: ev.enigmaEventsCount,
+              topGifts: ev.topGifts || [],
+              evidencePoints: ev.evidencePoints || [],
+              isManuallyReviewed: false,
+              reviewProvenance: "AUTOMATED_ANALYSIS",
+            }),
+            notes: existingCase.notes || "تمت المزامنة الآلية من محرك تحليل الأنيقما بالمنظومة (Analysis Engine 2.0)",
+          },
+        });
+        syncedCasesCount++;
+      } else {
         await prisma.intelligenceInvestigationCase.create({
           data: {
             tenantId,
             caseNumber,
-            title: `كشف قناع أنيقما: ${enigmaDisplay} ➔ @${realUser}`,
+            title: caseTitle,
             primaryPlatformUserId: pUid,
-            verdictStatus: "VERIFIED_IDENTIFIER_MATCH",
-            similarityScore: 100,
-            evidenceSummary: `تطابق قطعي مثبت رقمياً للمعرف الثابت (SecUID: ${pUid}) بين قناع ${enigmaDisplay} والحساب المعتمد @${realUser} بإجمالي دعم ${combinedDiamonds.toLocaleString()} ماسة.`,
+            verdictStatus,
+            similarityScore,
+            evidenceSummary,
             evidenceDetailsJson: JSON.stringify({
               enigmaUsername: enigmaUser,
               enigmaDisplayName: enigmaDisplay,
@@ -550,8 +663,10 @@ export class IntelligenceLabService {
               enigmaEventsCount: ev.enigmaEventsCount,
               topGifts: ev.topGifts || [],
               evidencePoints: ev.evidencePoints || [],
+              isManuallyReviewed: false,
+              reviewProvenance: "AUTOMATED_ANALYSIS",
             }),
-            notes: "تمت المزامنة الآلية من محرك تحليل الأنيقما بالمنظومة (SecUID Deterministic Ground Truth)",
+            notes: "تمت المزامنة الآلية من محرك تحليل الأنيقما بالمنظومة (Analysis Engine 2.0)",
           },
         });
         syncedCasesCount++;
@@ -684,11 +799,11 @@ export class IntelligenceLabService {
       const enigmaDisplay = ev.enigmaDisplayName || enigmaUser;
       const diamondsTotal = ev.totalCombinedDiamonds || ev.diamondsWithEnigma || 0;
 
-      // 1. Fetch raw events by deduplicationKey (instant indexed lookup)
-      const rawEvents = await prisma.rawEvent.findMany({
+      // 1. Fetch raw events by indexed platformUserId (fallback to deduplicationKey)
+      let rawEvents = await prisma.rawEvent.findMany({
         where: {
           liveSession: { tenantId },
-          deduplicationKey: { contains: `_${pUid}_` },
+          platformUserId: pUid,
         },
         select: {
           id: true,
@@ -699,6 +814,23 @@ export class IntelligenceLabService {
         orderBy: { sourceTimestamp: "asc" },
         take: 1000,
       });
+
+      if (rawEvents.length === 0) {
+        rawEvents = await prisma.rawEvent.findMany({
+          where: {
+            liveSession: { tenantId },
+            deduplicationKey: { contains: `_${pUid}_` },
+          },
+          select: {
+            id: true,
+            liveSessionId: true,
+            eventType: true,
+            sourceTimestamp: true,
+          },
+          orderBy: { sourceTimestamp: "asc" },
+          take: 1000,
+        });
+      }
 
       // 2. Fetch supporter
       const supp = await prisma.supporter.findFirst({
@@ -733,109 +865,152 @@ export class IntelligenceLabService {
       const firstObserved = allTimestamps.length > 0 ? new Date(Math.min(...allTimestamps)) : supp?.firstObservedAt || null;
       const lastObserved = allTimestamps.length > 0 ? new Date(Math.max(...allTimestamps)) : supp?.lastObservedAt || null;
 
-      const hasSufficiency = totalEventsAnalyzed >= 3 || diamondsTotal > 0;
-      const dataSufficiency = hasSufficiency ? "SUFFICIENT" : "INSUFFICIENT_DATA";
+      const sufficiency = EvidencePolicyEngine.evaluateSingleAccountSufficiency(
+        totalEventsAnalyzed,
+        distinctSessionsCount,
+        diamondsTotal
+      );
+      const dataSufficiency = sufficiency.status;
       const isVerifiedUid = ev.classification === "IDENTIFIER_MATCH" && Boolean(pUid);
 
       let verdictStatus: VerdictStatus;
-      let similarityScore: number;
+      let similarityScore: number | null;
       let evidenceSummary: string;
+      let caseTitle: string;
 
-      if (!hasSufficiency) {
+      if (!sufficiency.isSufficient) {
         insufficientDataCount++;
         verdictStatus = "UNRESOLVED";
-        similarityScore = 0;
-        evidenceSummary = `بيانات تاريخية غير كافية: رصيد الدعم 0 ماسة وعدد الأحداث المرصودة (${totalEventsAnalyzed}) أقل من الحد الأدنى للتحليل الجنائي الموثوق (< 3 أحداث).`;
+        similarityScore = null;
+        caseTitle = `سجل غير مكتمل: ${enigmaDisplay}`;
+        evidenceSummary = `بيانات تاريخية غير كافية: ${sufficiency.reason}`;
       } else if (isVerifiedUid) {
         sufficientDataCount++;
         verifiedUidCount++;
         verdictStatus = "VERIFIED_IDENTIFIER_MATCH";
         similarityScore = 100;
+        caseTitle = `تحليل جنائي قطعي: ${enigmaDisplay} ➔ @${realUser}`;
         evidenceSummary = `تطابق قطعي مثبت رقمياً للمعرف الثابت (SecUID: ${pUid}) بين قناع ${enigmaDisplay} والحساب المعتمد @${realUser} عبر ${totalEventsAnalyzed} حدثاً مرصوداً و ${distinctSessionsCount} جلسة بث، بدعم إجمالي ${diamondsTotal.toLocaleString()} ماسة.`;
       } else {
         sufficientDataCount++;
-        verdictStatus = "BEHAVIORAL_SIMILARITY";
-        similarityScore = 85;
-        evidenceSummary = `ارتباط سلوكي مرصود بدعم ${diamondsTotal.toLocaleString()} ماسة عبر ${totalEventsAnalyzed} حدثاً في ${distinctSessionsCount} جلسة بث.`;
+        verdictStatus = "NEEDS_REVIEW";
+        similarityScore = null;
+        caseTitle = `استطلاع جنائي لقناع أنيقما: ${enigmaDisplay}`;
+        evidenceSummary = `حساب مقنع نشط برصيد دعم ${diamondsTotal.toLocaleString()} ماسة عبر ${totalEventsAnalyzed} حدثاً في ${distinctSessionsCount} جلسة بث. لم يتم ربطه قطعياً بحساب علني حتى الآن ويتطلب مراجعة استطلاعية ومقارنة جنائية مع المرشحين.`;
       }
 
-      // Case number deterministic slug
-      const cleanSlug = realUser.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 8).toUpperCase() || "USER";
-      const caseNumber = `CASE-ENIGMA-${cleanSlug}-${pUid.slice(-4)}`;
+      // Collision-resistant deterministic case identifier
+      const canonicalCaseNumber = `CASE-ENIGMA-${pUid}`;
 
-      // Upsert investigation case
-      await prisma.intelligenceInvestigationCase.upsert({
+      // Check existing case to preserve manual investigations
+      const existingCase = await prisma.intelligenceInvestigationCase.findFirst({
         where: {
-          tenantId_caseNumber: {
-            tenantId,
-            caseNumber,
-          },
-        },
-        update: {
-          title: `تحليل جنائي متعمق: ${enigmaDisplay} ➔ @${realUser}`,
-          primaryPlatformUserId: pUid,
-          verdictStatus,
-          similarityScore,
-          evidenceSummary,
-          evidenceDetailsJson: JSON.stringify({
-            platformUserId: pUid,
-            realUsername: realUser,
-            realDisplayName: realDisplay,
-            enigmaUsername: enigmaUser,
-            enigmaDisplayName: enigmaDisplay,
-            diamondsTotal,
-            diamondsWithEnigma: ev.diamondsWithEnigma,
-            diamondsPublic: ev.diamondsPublic,
-            rawEventsCount,
-            battleScoresCount,
-            totalEventsAnalyzed,
-            distinctSessionsCount,
-            firstObservedAt: firstObserved?.toISOString() || null,
-            lastObservedAt: lastObserved?.toISOString() || null,
-            topGifts: ev.topGifts || [],
-            evidencePoints: ev.evidencePoints || [],
-            dataSufficiency,
-            limitations:
-              dataSufficiency === "INSUFFICIENT_DATA"
-                ? "تم توثيق الحساب كحالة غير محسومة (UNRESOLVED) لعدم توفر نشاط كافٍ في سجلات الأحداث المباشرة."
-                : "تحليل مؤكد مدعوم بسجلات الأحداث الحقيقية وتوثيق المعرف الرقمي الثابت.",
-          }),
-          notes: `تم التحديث بواسطة محرك التحليل الجنائي التاريخي (Analysis Engine 2.0)`,
-        },
-        create: {
           tenantId,
-          caseNumber,
-          title: `تحليل جنائي متعمق: ${enigmaDisplay} ➔ @${realUser}`,
-          primaryPlatformUserId: pUid,
-          verdictStatus,
-          similarityScore,
-          evidenceSummary,
-          evidenceDetailsJson: JSON.stringify({
-            platformUserId: pUid,
-            realUsername: realUser,
-            realDisplayName: realDisplay,
-            enigmaUsername: enigmaUser,
-            enigmaDisplayName: enigmaDisplay,
-            diamondsTotal,
-            diamondsWithEnigma: ev.diamondsWithEnigma,
-            diamondsPublic: ev.diamondsPublic,
-            rawEventsCount,
-            battleScoresCount,
-            totalEventsAnalyzed,
-            distinctSessionsCount,
-            firstObservedAt: firstObserved?.toISOString() || null,
-            lastObservedAt: lastObserved?.toISOString() || null,
-            topGifts: ev.topGifts || [],
-            evidencePoints: ev.evidencePoints || [],
-            dataSufficiency,
-            limitations:
-              dataSufficiency === "INSUFFICIENT_DATA"
-                ? "تم توثيق الحساب كحالة غير محسومة (UNRESOLVED) لعدم توفر نشاط كافٍ في سجلات الأحداث المباشرة."
-                : "تحليل مؤكد مدعوم بسجلات الأحداث الحقيقية وتوثيق المعرف الرقمي الثابت.",
-          }),
-          notes: `تم التوثيق بواسطة محرك التحليل الجنائي التاريخي (Analysis Engine 2.0)`,
+          OR: [
+            { caseNumber: canonicalCaseNumber },
+            { primaryPlatformUserId: pUid },
+          ],
         },
       });
+
+      let existingDetails: Record<string, any> = {};
+      if (existingCase?.evidenceDetailsJson) {
+        try {
+          existingDetails = JSON.parse(existingCase.evidenceDetailsJson);
+        } catch {}
+      }
+
+      const isManual =
+        existingCase != null &&
+        (existingDetails.isManuallyReviewed === true ||
+          existingDetails.reviewProvenance === "MANUAL_OPERATOR_REVIEW" ||
+          existingCase.assignedTo != null ||
+          (Boolean(existingCase.notes) &&
+            !existingCase.notes?.startsWith("تم التحديث بواسطة") &&
+            !existingCase.notes?.startsWith("تم التوثيق بواسطة") &&
+            !existingCase.notes?.startsWith("تمت المزامنة الآلية")));
+
+      if (isManual && existingCase) {
+        // Preserve manual reviewer's verdict, title, and score
+        verdictStatus = existingCase.verdictStatus as VerdictStatus;
+        similarityScore = existingCase.similarityScore;
+        caseTitle = existingCase.title;
+      }
+
+      const mergedDetails = isManual
+        ? {
+            ...existingDetails,
+            platformUserId: pUid,
+            realUsername: realUser,
+            realDisplayName: realDisplay,
+            enigmaUsername: enigmaUser,
+            enigmaDisplayName: enigmaDisplay,
+            diamondsTotal,
+            diamondsWithEnigma: ev.diamondsWithEnigma,
+            diamondsPublic: ev.diamondsPublic,
+            rawEventsCount,
+            battleScoresCount,
+            totalEventsAnalyzed,
+            distinctSessionsCount,
+            firstObservedAt: firstObserved?.toISOString() || null,
+            lastObservedAt: lastObserved?.toISOString() || null,
+            topGifts: ev.topGifts || [],
+            evidencePoints: ev.evidencePoints || [],
+            dataSufficiency,
+            limitations: sufficiency.dataLimitations,
+            isManuallyPreserved: true,
+            telemetryLastRefreshedAt: new Date().toISOString(),
+          }
+        : {
+            platformUserId: pUid,
+            realUsername: realUser,
+            realDisplayName: realDisplay,
+            enigmaUsername: enigmaUser,
+            enigmaDisplayName: enigmaDisplay,
+            diamondsTotal,
+            diamondsWithEnigma: ev.diamondsWithEnigma,
+            diamondsPublic: ev.diamondsPublic,
+            rawEventsCount,
+            battleScoresCount,
+            totalEventsAnalyzed,
+            distinctSessionsCount,
+            firstObservedAt: firstObserved?.toISOString() || null,
+            lastObservedAt: lastObserved?.toISOString() || null,
+            topGifts: ev.topGifts || [],
+            evidencePoints: ev.evidencePoints || [],
+            dataSufficiency,
+            limitations: sufficiency.dataLimitations,
+            isManuallyPreserved: false,
+          };
+
+      const casePayload = {
+        title: caseTitle,
+        primaryPlatformUserId: pUid,
+        verdictStatus,
+        similarityScore,
+        evidenceSummary: isManual && existingCase?.evidenceSummary ? existingCase.evidenceSummary : evidenceSummary,
+        evidenceDetailsJson: JSON.stringify(mergedDetails),
+      };
+
+      if (existingCase) {
+        await prisma.intelligenceInvestigationCase.update({
+          where: { id: existingCase.id },
+          data: {
+            caseNumber: canonicalCaseNumber,
+            ...casePayload,
+            ...(isManual ? {} : { notes: `تم التحديث بواسطة محرك التحليل الجنائي التاريخي (Analysis Engine 2.0)` }),
+          },
+        });
+      } else {
+        await prisma.intelligenceInvestigationCase.create({
+          data: {
+            tenantId,
+            caseNumber: canonicalCaseNumber,
+            ...casePayload,
+            notes: `تم التوثيق بواسطة محرك التحليل الجنائي التاريخي (Analysis Engine 2.0)`,
+          },
+        });
+      }
       casesCreatedOrUpdated++;
 
       results.push({
@@ -849,7 +1024,7 @@ export class IntelligenceLabService {
         distinctSessionsCount,
         dataSufficiency,
         verdictStatus,
-        caseNumber,
+        caseNumber: canonicalCaseNumber,
       });
     }
 

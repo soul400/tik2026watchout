@@ -84,6 +84,7 @@ export class LiveEventPipeline {
         data: {
           liveSessionId: this.liveSessionId,
           deduplicationKey: dedupKey,
+          platformUserId: actor.platformUserId,
           eventType: "GIFT",
           sourceTimestamp: new Date(timestamp),
           payload: JSON.stringify(data),
@@ -193,6 +194,7 @@ export class LiveEventPipeline {
         data: {
           liveSessionId: this.liveSessionId,
           deduplicationKey: dedupKey,
+          platformUserId: actor.platformUserId,
           eventType: "CHAT",
           sourceTimestamp: new Date(timestamp),
           payload: JSON.stringify(data),

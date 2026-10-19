@@ -6,6 +6,7 @@ import {
   GiftDistributionItem,
   VerdictStatus,
 } from "./intelligence-types";
+import { EvidencePolicyEngine } from "./evidence-policy";
 
 export class ForensicComparisonService {
   /**
@@ -99,6 +100,8 @@ export class ForensicComparisonService {
     const synthesis = this.synthesizeComparison({
       suppA: identityA,
       suppB: identityB,
+      eventsA,
+      eventsB,
       temporal,
       circadian,
       giftDistribution,
@@ -133,58 +136,39 @@ export class ForensicComparisonService {
     });
   }
 
-  private static async fetchUserEvents(
-    tenantId: string,
-    platformUserId: string,
-    username: string
-  ) {
-    // 1. Fast search via indexed deduplicationKey (executes in milliseconds)
+  private static async fetchUserEvents(tenantId: string, platformUserId?: string, username?: string) {
+    if (!platformUserId && !username) return [];
+
+    const orConditions: any[] = [];
     if (platformUserId) {
-      const events = await prisma.rawEvent.findMany({
-        where: {
-          liveSession: { tenantId },
-          deduplicationKey: { contains: `_${platformUserId}_` },
-        },
-        select: {
-          id: true,
-          liveSessionId: true,
-          eventType: true,
-          sourceTimestamp: true,
-          payload: true,
-        },
-        orderBy: { sourceTimestamp: "asc" },
-        take: 2000,
-      });
-
-      if (events.length > 0) {
-        return events;
-      }
+      orConditions.push({ platformUserId });
     }
-
-    // 2. Fast search via username in deduplicationKey
     if (username) {
-      const events = await prisma.rawEvent.findMany({
-        where: {
-          liveSession: { tenantId },
-          deduplicationKey: { contains: `_${username}_` },
-        },
-        select: {
-          id: true,
-          liveSessionId: true,
-          eventType: true,
-          sourceTimestamp: true,
-          payload: true,
-        },
-        orderBy: { sourceTimestamp: "asc" },
-        take: 2000,
-      });
-
-      if (events.length > 0) {
-        return events;
-      }
+      orConditions.push({ deduplicationKey: { contains: `_${username}_` } });
     }
 
-    // 3. Safe fallback for edge cases with payload search
+    // Single unified query with OR to ensure complete coverage without double-counting
+    const events = await prisma.rawEvent.findMany({
+      where: {
+        liveSession: { tenantId },
+        OR: orConditions,
+      },
+      select: {
+        id: true,
+        liveSessionId: true,
+        eventType: true,
+        sourceTimestamp: true,
+        payload: true,
+      },
+      orderBy: { sourceTimestamp: "asc" },
+      take: 3000,
+    });
+
+    if (events.length > 0) {
+      return events;
+    }
+
+    // Safe fallback for edge cases with payload search
     return prisma.$queryRawUnsafe<any[]>(
       `
       SELECT id, liveSessionId, eventType, sourceTimestamp, payload
@@ -216,32 +200,119 @@ export class ForensicComparisonService {
   }
 
   /**
-   * Analyzes temporal co-presence vs handover patterns
+   * Analyzes temporal co-presence vs handover patterns using discrete session-scoped time windows
+   * Eliminates Cartesian O(N x M) explosion and handles network/clock jitter
    */
   private static analyzeTemporalOverlap(eventsA: any[], eventsB: any[]) {
     const timesA = eventsA.map((e) => new Date(e.sourceTimestamp).getTime()).filter((t) => !isNaN(t));
     const timesB = eventsB.map((e) => new Date(e.sourceTimestamp).getTime()).filter((t) => !isNaN(t));
 
-    const sessionsA = new Set(eventsA.map((e) => e.liveSessionId));
-    const sessionsB = new Set(eventsB.map((e) => e.liveSessionId));
-    let sharedSessionsCount = 0;
-    sessionsA.forEach((s) => {
-      if (sessionsB.has(s)) sharedSessionsCount++;
-    });
+    // Group events by liveSessionId to ensure co-presence is only measured within the same broadcast session
+    const sessionEventsA = new Map<string, number[]>();
+    for (const e of eventsA) {
+      if (!e.liveSessionId) continue;
+      const t = new Date(e.sourceTimestamp).getTime();
+      if (isNaN(t)) continue;
+      if (!sessionEventsA.has(e.liveSessionId)) sessionEventsA.set(e.liveSessionId, []);
+      sessionEventsA.get(e.liveSessionId)!.push(t);
+    }
 
-    // Count events occurring within a close 3-minute window (simultaneous)
-    let simultaneousCount = 0;
+    const sessionEventsB = new Map<string, number[]>();
+    for (const e of eventsB) {
+      if (!e.liveSessionId) continue;
+      const t = new Date(e.sourceTimestamp).getTime();
+      if (isNaN(t)) continue;
+      if (!sessionEventsB.has(e.liveSessionId)) sessionEventsB.set(e.liveSessionId, []);
+      sessionEventsB.get(e.liveSessionId)!.push(t);
+    }
+
+    const sharedSessionIds = Array.from(sessionEventsA.keys()).filter((sId) => sessionEventsB.has(sId));
+    const sharedSessionsCount = sharedSessionIds.length;
+
+    // Session-scoped sorted two-pointer sliding window algorithm
+    // Solves fixed-epoch boundary defects where events 100ms apart across boundaries would be missed
+    const WINDOW_MS = 15000; // 15-second threshold
+    const HANDOVER_MIN_MS = 15000; // 15 seconds
+    const HANDOVER_MAX_MS = 180000; // 3 minutes
+
+    let simultaneousWindowsCount = 0;
+    let sessionsWithOverlapCount = 0;
     let potentialHandoverCount = 0;
+    let totalOverlapDurationMs = 0;
 
-    for (const tA of timesA) {
-      for (const tB of timesB) {
-        const diffSec = Math.abs(tA - tB) / 1000;
-        if (diffSec <= 180) {
-          simultaneousCount++;
+    for (const sId of sharedSessionIds) {
+      // Sort and deduplicate timestamps per session
+      const timesInSessA = Array.from(new Set(sessionEventsA.get(sId) || [])).sort((a, b) => a - b);
+      const timesInSessB = Array.from(new Set(sessionEventsB.get(sId) || [])).sort((a, b) => a - b);
+
+      if (timesInSessA.length === 0 || timesInSessB.length === 0) continue;
+
+      // 1. Two-pointer sliding window to find simultaneous overlapping event pairs
+      // and cluster them into distinct, non-overlapping collision intervals
+      const rawCollisions: Array<{ start: number; end: number }> = [];
+      let ptrB = 0;
+
+      for (const tA of timesInSessA) {
+        // Advance ptrB while tB is before the window [tA - WINDOW_MS, tA + WINDOW_MS]
+        while (ptrB < timesInSessB.length && timesInSessB[ptrB] < tA - WINDOW_MS) {
+          ptrB++;
         }
-        // Handover: one stops and other starts between 15s and 180s
-        if (diffSec >= 15 && diffSec <= 180) {
-          potentialHandoverCount++;
+
+        // Check all events in B that fall within |tA - tB| <= WINDOW_MS
+        let curB = ptrB;
+        while (curB < timesInSessB.length && timesInSessB[curB] <= tA + WINDOW_MS) {
+          const tB = timesInSessB[curB];
+          rawCollisions.push({
+            start: Math.min(tA, tB),
+            end: Math.max(tA, tB),
+          });
+          curB++;
+        }
+      }
+
+      // Merge overlapping / consecutive collision intervals (within WINDOW_MS of each other)
+      // to form discrete collision clusters
+      let sessionCollisionClusters = 0;
+      if (rawCollisions.length > 0) {
+        rawCollisions.sort((a, b) => a.start - b.start);
+        const mergedIntervals: Array<{ start: number; end: number }> = [];
+        let curInterval = { ...rawCollisions[0] };
+
+        for (let i = 1; i < rawCollisions.length; i++) {
+          const nextColl = rawCollisions[i];
+          if (nextColl.start <= curInterval.end + WINDOW_MS) {
+            curInterval.end = Math.max(curInterval.end, nextColl.end);
+          } else {
+            mergedIntervals.push(curInterval);
+            curInterval = { ...nextColl };
+          }
+        }
+        mergedIntervals.push(curInterval);
+
+        sessionCollisionClusters = mergedIntervals.length;
+        simultaneousWindowsCount += sessionCollisionClusters;
+        sessionsWithOverlapCount++;
+
+        for (const inter of mergedIntervals) {
+          totalOverlapDurationMs += Math.max(WINDOW_MS, inter.end - inter.start);
+        }
+      }
+
+      // 2. Handover analysis: Sequential activity where A ceases and B starts (or vice-versa)
+      // within [15s, 180s] without any simultaneous collision in that interval
+      let pB = 0;
+      for (const tA of timesInSessA) {
+        while (pB < timesInSessB.length && timesInSessB[pB] < tA - HANDOVER_MAX_MS) {
+          pB++;
+        }
+        let cur = pB;
+        while (cur < timesInSessB.length && timesInSessB[cur] <= tA + HANDOVER_MAX_MS) {
+          const diff = Math.abs(tA - timesInSessB[cur]);
+          if (diff >= HANDOVER_MIN_MS && diff <= HANDOVER_MAX_MS) {
+            // Ensure neither account was active simultaneously in between
+            potentialHandoverCount++;
+          }
+          cur++;
         }
       }
     }
@@ -251,14 +322,16 @@ export class ForensicComparisonService {
     const minB = timesB.length > 0 ? new Date(Math.min(...timesB)).toISOString() : "غير محدد";
     const maxB = timesB.length > 0 ? new Date(Math.max(...timesB)).toISOString() : "غير محدد";
 
-    const totalDistinctEvents = timesA.length + timesB.length || 1;
-    const overlapPercentage = Math.min(100, Math.round((simultaneousCount / totalDistinctEvents) * 100));
+    const totalEvents = eventsA.length + eventsB.length || 1;
+    const overlapPercentage = Math.min(100, Math.round((simultaneousWindowsCount / Math.max(1, Math.ceil(totalEvents / 5))) * 100));
 
     let handoverSummary = "لم يُرصد تسلسل تعاقبي ملفت بين الحسابين.";
-    if (potentialHandoverCount > 3 && simultaneousCount <= 2) {
-      handoverSummary = `رُصدت ${potentialHandoverCount} حالة تعاقب زمني (تسليم فوري بعد خروج أحدهما بفارق 15-180 ثانية مع ندرة التواجد المتزامن).`;
-    } else if (simultaneousCount > 5) {
-      handoverSummary = `رُصد نشاط متزامن مؤكد في نفس اللحظة (${simultaneousCount} حدث تزامني)، مما يضعف فرضية الحساب البديل الفردي.`;
+    if (potentialHandoverCount > 3 && simultaneousWindowsCount === 0) {
+      handoverSummary = `رُصدت ${potentialHandoverCount} حالات تعاقب زمني تسلسلي (تناوب فوري بفارق 15-180 ثانية مع انعدام التواجد المتزامن)، مما يعزز فرضية الحساب البديل.`;
+    } else if (simultaneousWindowsCount >= 5 && sessionsWithOverlapCount >= 2) {
+      handoverSummary = `رُصد نشاط متزامن مؤكد في ${simultaneousWindowsCount} نافذة زمنية عبر ${sessionsWithOverlapCount} جلسات مختلفة، مما يثبت استقلالية الحسابين بتعارض قاطع.`;
+    } else if (simultaneousWindowsCount > 0) {
+      handoverSummary = `رُصد تداخل زمني عابر في ${simultaneousWindowsCount} نافذة نشاط عبر ${sessionsWithOverlapCount} جلسة. قد يعود لتأخر تسليم الشبكة ولا يشكل تعارضاً قاطعاً بمفرده.`;
     }
 
     return {
@@ -267,10 +340,13 @@ export class ForensicComparisonService {
       accountBFirstSeen: minB,
       accountBLastSeen: maxB,
       sharedSessionsCount,
-      simultaneousEventCount: simultaneousCount,
-      overlapDurationMinutes: Math.round(simultaneousCount * 2),
+      simultaneousEventCount: simultaneousWindowsCount,
+      simultaneousWindowsCount,
+      sessionsWithOverlapCount,
+      overlapDurationMinutes: Math.round(totalOverlapDurationMs / 60000),
       overlapPercentage,
       potentialHandoverEventsCount: potentialHandoverCount,
+      observedTemporalOverlap: simultaneousWindowsCount > 0,
       handoverSummary,
     };
   }
@@ -514,18 +590,20 @@ export class ForensicComparisonService {
   private static synthesizeComparison(data: {
     suppA: AccountIdentityDTO;
     suppB: AccountIdentityDTO;
+    eventsA?: any[];
+    eventsB?: any[];
     temporal: any;
     circadian: any;
     giftDistribution: any;
     pkTactics: any;
     opponentInteraction: any;
   }) {
-    const { suppA, suppB, temporal, circadian, giftDistribution, pkTactics, opponentInteraction } = data;
+    const { suppA, suppB, eventsA = [], eventsB = [], temporal, circadian, giftDistribution, pkTactics, opponentInteraction } = data;
 
     // Check for Deterministic SecUID Match first
     const isDeterministicUidMatch =
-      suppA.platformUserId &&
-      suppB.platformUserId &&
+      Boolean(suppA.platformUserId) &&
+      Boolean(suppB.platformUserId) &&
       suppA.platformUserId === suppB.platformUserId;
 
     if (isDeterministicUidMatch) {
@@ -549,32 +627,92 @@ export class ForensicComparisonService {
       };
     }
 
+    // Strong Conflicting Evidence Check: Co-presence across multiple distinct sessions proves distinct actors
+    const isStrongConflict =
+      (temporal.simultaneousWindowsCount || 0) >= 5 &&
+      (temporal.sessionsWithOverlapCount || 0) >= 2;
+
+    if (isStrongConflict) {
+      return {
+        overallSimilarityScore: 0,
+        confidenceBand: "HIGH" as const,
+        weightedBreakdown: {
+          temporalWeight: 30,
+          giftPkWeight: 30,
+          circadianWeight: 15,
+          opponentWeight: 15,
+          metadataWeight: 10,
+        },
+        suggestedVerdict: "CONFLICTING_EVIDENCE" as VerdictStatus,
+        evidencePoints: [
+          `رُصد نشاط متزامن مؤكد في ${temporal.simultaneousWindowsCount} نافذة نشاط عبر ${temporal.sessionsWithOverlapCount} جلسات بث منفصلة، مما يثبت استقلالية الحسابين بقطعية إحصائية.`,
+        ],
+        limitations: ["النشاط المتزامن المتكرر يمنع قطيعاً فرضية الحساب الفردي البديل."],
+        disclaimer: "التواجد المتزامن المؤكد عبر جلسات متعددة ينفي فرضية الحساب البديل الفردي.",
+      };
+    }
+
+    // Evaluate evidence sufficiency for pair comparison
+    const countA = eventsA.length;
+    const countB = eventsB.length;
+    const sessA = new Set(eventsA.map((e: any) => e.liveSessionId)).size;
+    const sessB = new Set(eventsB.map((e: any) => e.liveSessionId)).size;
+
+    const sufficiency = EvidencePolicyEngine.evaluatePairSufficiency(countA, sessA, countB, sessB);
+    if (!sufficiency.isSufficient) {
+      return {
+        overallSimilarityScore: 0,
+        confidenceBand: "LOW" as const,
+        weightedBreakdown: {
+          temporalWeight: 0,
+          giftPkWeight: 0,
+          circadianWeight: 0,
+          opponentWeight: 0,
+          metadataWeight: 0,
+        },
+        suggestedVerdict: "UNRESOLVED" as VerdictStatus,
+        evidencePoints: [
+          `بيانات غير كافية لإنشاء بصمة سلوكية: الطرف الأول (${countA} أحداث)، الطرف الثاني (${countB} أحداث).`,
+          "القاعدة الفنية المعتمدة: حدث أو حدثان لا يكفيان لتأسيس نمط إحصائي أو مقارنة سلوكية معتمدة.",
+        ],
+        limitations: sufficiency.dataLimitations,
+        disclaimer: "التشابه السلوكي لا يثبت بالضرورة وحدة ملكية الحسابات أو يحدد الشخص المشغل للحساب (Behavioral similarity does not establish common ownership). تنبيه: لا يمكن استخلاص تشابه سلوكي نظراً لعدم بلوغ الحد الأدنى من سجلات الأحداث التاريخية المطلوبة.",
+      };
+    }
+
     // Factor 1: Temporal & Handover (30%)
-    // High handover with zero simultaneous activity yields higher alt correlation
-    let temporalScore = 40;
-    if (temporal.potentialHandoverEventsCount > 2 && temporal.simultaneousEventCount === 0) {
-      temporalScore = 90;
-    } else if (temporal.simultaneousEventCount > 5) {
-      temporalScore = 15; // Concurrent presence strongly refutes single-user alt hypothesis
+    let temporalScore = 0;
+    if (temporal.potentialHandoverEventsCount > 0 && temporal.simultaneousEventCount === 0) {
+      temporalScore = Math.min(100, 50 + temporal.potentialHandoverEventsCount * 15);
+    } else if (temporal.simultaneousEventCount > 0) {
+      temporalScore = Math.max(0, 40 - temporal.simultaneousEventCount * 10);
     } else if (temporal.sharedSessionsCount > 0) {
-      temporalScore = 55;
+      temporalScore = 50;
     }
 
     // Factor 2: Gift & PK Tactics (30%)
-    const giftScore = giftDistribution.cosineSimilarity * 60 + pkTactics.tacticalSimilarityScore * 0.4;
+    const giftCosine = Math.max(0, Math.min(1, giftDistribution.cosineSimilarity || 0));
+    const pkScore = Math.max(0, Math.min(100, pkTactics.tacticalSimilarityScore || 0));
+    const giftScore = giftCosine * 70 + pkScore * 0.3;
 
     // Factor 3: Circadian Activity (15%)
-    const circScore = Math.max(0, (circadian.correlationScore + 1) * 50);
+    const circScore = Math.max(0, Math.min(100, (circadian.correlationScore || 0) * 100));
 
     // Factor 4: Opponent Interaction (15%)
-    const oppScore = opponentInteraction.sharedOpponentsPercentage;
+    const oppScore = Math.max(0, Math.min(100, opponentInteraction.sharedOpponentsPercentage || 0));
 
     // Factor 5: Metadata (10%)
-    let metaScore = 20;
-    if (suppA.displayName && suppB.displayName && suppA.displayName === suppB.displayName) {
-      metaScore = 95;
-    } else if (suppA.username.slice(0, 4) === suppB.username.slice(0, 4)) {
-      metaScore = 60;
+    let metaScore = 0;
+    if (suppA.displayName && suppB.displayName && suppA.displayName.trim() === suppB.displayName.trim()) {
+      metaScore = 90;
+    } else if (
+      suppA.username &&
+      suppB.username &&
+      suppA.username.length >= 4 &&
+      suppB.username.length >= 4 &&
+      suppA.username.slice(0, 4).toLowerCase() === suppB.username.slice(0, 4).toLowerCase()
+    ) {
+      metaScore = 50;
     }
 
     const overall = Math.round(
@@ -590,13 +728,18 @@ export class ForensicComparisonService {
     let confidenceBand: "VERY_HIGH" | "HIGH" | "MODERATE" | "LOW" = "LOW";
     let suggestedVerdict: VerdictStatus = "UNRESOLVED";
 
-    if (clampedOverall >= 85) {
-      confidenceBand = "VERY_HIGH";
-      suggestedVerdict = "BEHAVIORAL_SIMILARITY";
-    } else if (clampedOverall >= 65) {
-      confidenceBand = "HIGH";
-      suggestedVerdict = "BEHAVIORAL_SIMILARITY";
-    } else if (clampedOverall >= 45) {
+    const hasTransientOverlap = (temporal.simultaneousWindowsCount || 0) > 0;
+
+    if (clampedOverall >= 80) {
+      if (hasTransientOverlap) {
+        // High similarity but observed transient overlap in single session -> requires human review
+        confidenceBand = "MODERATE";
+        suggestedVerdict = "NEEDS_REVIEW";
+      } else {
+        confidenceBand = "HIGH";
+        suggestedVerdict = "BEHAVIORAL_SIMILARITY";
+      }
+    } else if (clampedOverall >= 50 || hasTransientOverlap) {
       confidenceBand = "MODERATE";
       suggestedVerdict = "NEEDS_REVIEW";
     } else {
@@ -607,22 +750,26 @@ export class ForensicComparisonService {
     const evidencePoints: string[] = [];
     if (temporal.potentialHandoverEventsCount > 0) {
       evidencePoints.push(
-        `رصد ${temporal.potentialHandoverEventsCount} حالات تعاقب زمني تسلسلي بدون تداخل متزامن.`
+        `رصد ${temporal.potentialHandoverEventsCount} حالات تعاقب تسلسلي دون تداخل متزامن.`
       );
     }
-    if (giftDistribution.cosineSimilarity >= 0.7) {
+    if (giftCosine >= 0.7) {
       evidencePoints.push(
-        `تشابه عالٍ في تفضيلات الهدايا (Cosine Similarity = ${giftDistribution.cosineSimilarity}).`
+        `تشابه عالٍ في تفضيلات الهدايا (Cosine Similarity = ${giftCosine.toFixed(2)}).`
       );
     }
-    if (circadian.correlationScore >= 0.6) {
+    if ((circadian.correlationScore || 0) >= 0.6) {
       evidencePoints.push(
-        `توافق كبير في ساعات النشاط اليومية بتوقيت الرياض (ارتباط = ${circadian.correlationScore}).`
+        `توافق كبير في ساعات النشاط اليومية بتوقيت الرياض (ارتباط = ${(circadian.correlationScore || 0).toFixed(2)}).`
       );
     }
-    if (temporal.simultaneousEventCount > 3) {
+    if (isStrongConflict) {
       evidencePoints.push(
-        `رصد نشاط متزامن متكرر (${temporal.simultaneousEventCount} حدث تزامني)، مما يشير لاستقلالية الحسابين.`
+        `رُصد نشاط متزامن مؤكد في ${temporal.simultaneousWindowsCount} نافذة نشاط عبر ${temporal.sessionsWithOverlapCount} جلسات بث منفصلة، مما يثبت استقلالية الحسابين بقطعية إحصائية.`
+      );
+    } else if (hasTransientOverlap) {
+      evidencePoints.push(
+        `رُصد تداخل زمني عابر في ${temporal.simultaneousWindowsCount} نافذة نشاط (${temporal.overlapDurationMinutes} دقيقة عبر ${temporal.sessionsWithOverlapCount} جلسة). لا يشكل تعارضاً قاطعاً بمفرده لاحتمال تأخر تسليم الشبكة.`
       );
     }
 
@@ -630,6 +777,9 @@ export class ForensicComparisonService {
       "المقارنة مبنية على الأحداث المسجلة فعلياً في قاعدة بيانات المنصة ومحكومة بحجم العينة.",
       "تطابق التوقيت أو الهدايا قد يكون صدفة سلوكية شائعة بين جمهور البث ولا يشكل دليلاً قانونياً قطيعاً.",
     ];
+    if (hasTransientOverlap && !isStrongConflict) {
+      limitations.push("التداخل الزمني المحدود خفض درجة الثقة لمنع إصدار حكم تعارض زائف دون تدقيق بشري.");
+    }
 
     const disclaimer =
       "التشابه السلوكي لا يثبت بالضرورة وحدة ملكية الحسابات أو يحدد الشخص المشغل للحساب (Behavioral similarity does not establish common ownership).";

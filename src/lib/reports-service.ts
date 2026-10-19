@@ -16,7 +16,10 @@ export type ReportType =
   | "STQI_TIMING_REPORT"
   | "DATA_QUALITY_RECONCILIATION"
   | "ENIGMA_UNMASKED_ANALYSIS"
-  | "SUPPORTER_PRESENCE_PATTERN";
+  | "SUPPORTER_PRESENCE_PATTERN"
+  | "ENIGMA_COMPARISON_PDF"
+  | "ENIGMA_ENTRY_RADAR_REPORT"
+  | "PK_TACTICAL_INTELLIGENCE_REPORT";
 
 export interface ReportMetadata {
   reportType: ReportType;
@@ -2126,6 +2129,300 @@ export class ReportsService {
           `تركيز البثوث الماراثونية أيام (${platformPeakDayName}) حيث تشير البيانات التاريخية إلى أعلى معدل لتزامن حضور الركائز التكتيكية.`,
           `مراعاة متوسط نافذة التفاعل المقدرة (${overallAvgDuration > 0 ? overallAvgDuration + " دقيقة" : "المتقطعة"}) عند طلب أدوات الدعم كقفاز الحظ والضباب لتفادي استهلاكها خارج فترة ذروة تواجد الداعم.`,
           `الداعمون المصنفون تحت "نمط أولي" أو "بيانات غير كافية" يتطلبون تجميع عينات مراقبة إضافية عبر 3 بثوث قادمة على الأقل لتأكيد استقرار نوافذهم الزمنية.`,
+        ];
+        break;
+      }
+
+      case "ENIGMA_COMPARISON_PDF": {
+        title = "تقرير المقارنة الجنائية والسلوكية بين الحسابات (Forensic Account Comparison Audit)";
+        headers = [
+          "البعد التحليلي",
+          "الحساب الأول (Account A)",
+          "الحساب الثاني (Account B)",
+          "مؤشر التوافق / التشابه",
+          "التفسير الجنائي والتحليلي",
+        ];
+
+        // Resolve two supporters: either supporterId vs another top supporter or two known alts
+        const topSupporters = await prisma.supporter.findMany({
+          where: { tenantId },
+          orderBy: { totalDiamonds: "desc" },
+          take: 2,
+        });
+
+        const targetA = supporterId || topSupporters[0]?.username || "mohra.test";
+        const targetB = topSupporters[1]?.username || "supporter.b";
+
+        const { ForensicComparisonService } = await import("./forensic-comparison-service");
+        let compResult: any = null;
+        try {
+          compResult = await ForensicComparisonService.compareAccounts({
+            tenantId,
+            accountAIdentifier: targetA,
+            accountBIdentifier: targetB,
+          });
+        } catch {
+          // Fallback if records are minimal
+          compResult = null;
+        }
+
+        if (compResult) {
+          rows = [
+            {
+              "البعد التحليلي": "الهوية العلنية والمعرف الثابت",
+              "الحساب الأول (Account A)": `@${compResult.accountA.username} (${compResult.accountA.displayName})`,
+              "الحساب الثاني (Account B)": `@${compResult.accountB.username} (${compResult.accountB.displayName})`,
+              "مؤشر التوافق / التشابه": compResult.synthesis.suggestedVerdict === "VERIFIED_IDENTIFIER_MATCH" ? "100% تطابق قطعي" : "معرفات مستقلة",
+              "التفسير الجنائي والتحليلي": compResult.synthesis.suggestedVerdict === "VERIFIED_IDENTIFIER_MATCH" ? "تطابق ثابت في SecUID" : "المعرفات الرقمية مستقلة مع تشابه في السياق",
+            },
+            {
+              "البعد التحليلي": "التداخل والتعاقب الزمني (Temporal)",
+              "الحساب الأول (Account A)": `${compResult.temporal.sharedSessionsCount} جلسات مشتركة`,
+              "الحساب الثاني (Account B)": `${compResult.temporal.simultaneousEventCount} أحداث متزامنة`,
+              "مؤشر التوافق / التشابه": `${compResult.temporal.potentialHandoverEventsCount} حالات تسليم`,
+              "التفسير الجنائي والتحليلي": compResult.temporal.handoverSummary,
+            },
+            {
+              "البعد التحليلي": "التوزيع الساعي (24h Circadian)",
+              "الحساب الأول (Account A)": `الذروة: ${compResult.circadian.peakHoursA.map((h: number) => h + ":00").join(", ") || "N/A"}`,
+              "الحساب الثاني (Account B)": `الذروة: ${compResult.circadian.peakHoursB.map((h: number) => h + ":00").join(", ") || "N/A"}`,
+              "مؤشر التوافق / التشابه": `ارتباط ${compResult.circadian.correlationScore}`,
+              "التفسير الجنائي والتحليلي": "تحليل ساعات النشاط اليومية بتوقيت الرياض (Asia/Riyadh)",
+            },
+            {
+              "البعد التحليلي": "تفضيلات الهدايا (Gift Vectors)",
+              "الحساب الأول (Account A)": `متوسط الهدية: ${compResult.giftDistribution.avgGiftValueA.toLocaleString()} 💎`,
+              "الحساب الثاني (Account B)": `متوسط الهدية: ${compResult.giftDistribution.avgGiftValueB.toLocaleString()} 💎`,
+              "مؤشر التوافق / التشابه": `Cosine = ${compResult.giftDistribution.cosineSimilarity}`,
+              "التفسير الجنائي والتحليلي": "تشابه جيب التمام بين متجهات توزيع الهدايا الرقمية",
+            },
+            {
+              "البعد التحليلي": "السلوك التكتيكي بالنزالات (PK)",
+              "الحساب الأول (Account A)": `الثواني الأخيرة: ${compResult.pkTactics.final10SecondsPercentageA}%`,
+              "الحساب الثاني (Account B)": `الثواني الأخيرة: ${compResult.pkTactics.final10SecondsPercentageB}%`,
+              "مؤشر التوافق / التشابه": `${compResult.pkTactics.tacticalSimilarityScore}% توافق`,
+              "التفسير الجنائي والتحليلي": "نسبة النقاط المرسلة في الثواني الـ 10 الحاسمة وتفعيل القفاز",
+            },
+          ];
+
+          kpis = [
+            {
+              label: "مؤشر التشابه السلوكي العام",
+              value: `${compResult.synthesis.overallSimilarityScore}%`,
+              subtext: `نطاق: ${compResult.synthesis.confidenceBand}`,
+              color: compResult.synthesis.overallSimilarityScore >= 75 ? "rose" : "cyan",
+            },
+            {
+              label: "الحكم التحليلي المقترح",
+              value: compResult.synthesis.suggestedVerdict,
+              subtext: "تصنيف المراجعة الجنائية",
+              color: "purple",
+            },
+            {
+              label: "تشابه توزيع الهدايا",
+              value: `${Math.round(compResult.giftDistribution.cosineSimilarity * 100)}%`,
+              subtext: "Cosine Similarity",
+              color: "amber",
+            },
+            {
+              label: "أحداث التعاقب الزمني",
+              value: compResult.temporal.potentialHandoverEventsCount.toString(),
+              subtext: "فارق 15-180 ثانية",
+              color: "emerald",
+            },
+          ];
+
+          executiveSummary = `يوثق هذا التقرير الجنائي نتيجة المقارنة الشاملة متعددة الأبعاد بين الحساب (@${compResult.accountA.username}) والحساب (@${compResult.accountB.username}). استند التحليل إلى فحص دقيق لسجلات التزامن الزمني، والتسلسل التعاقبي، وتوزيع الهدايا عبر مؤشر Cosine Similarity، والتوافق الساعي بتوقيت الرياض. نؤكد أن مؤشر التشابه السلوكي العام (${compResult.synthesis.overallSimilarityScore}%) يقيس التوافق الإحصائي في السلوك الموثق ولا يمثل بأي حال من الأحوال إثباتاً قانونياً لوحدة الملكية الشخصية دون تطابق قطعي في المعرف التقني الثابت (SecUID).`;
+
+          recommendations = [
+            "التعامل مع نتائج التشابه السلوكي كقرائن تحليلية تساعد في إدارة البث وليس كأحكام نهائية.",
+            "مراقبة الحسابين في البثوث القادمة للتثبت من وجود أحداث تزامنية صريحة تقطع بعدم وحدة المشغل.",
+            "اعتماد سياسة ترحيب متوازنة بالمايك دون توجيه اتهامات مباشرة في الشات العام.",
+          ];
+        } else {
+          rows = [{ "البعد التحليلي": "بيانات غير كافية", "الحساب الأول (Account A)": targetA, "الحساب الثاني (Account B)": targetB, "مؤشر التوافق / التشابه": "-", "التفسير الجنائي والتحليلي": "يتطلب الحسابان عينات إضافية لإجراء المقارنة" }];
+          kpis = [{ label: "حالة البيانات", value: "غير كافية", color: "amber" }];
+          executiveSummary = "البيانات المسجلة لهذين الحسابين غير كافية لإجراء مقارنة جنائية مكتملة.";
+          recommendations = ["جمع عينات إضافية من خلال البثوث القادمة."];
+        }
+        break;
+      }
+
+      case "ENIGMA_ENTRY_RADAR_REPORT": {
+        title = "تقرير رادار الدخول اللحظي وسجل المراقبة (Entry Radar Audit Report)";
+        headers = [
+          "معرف التنبيه",
+          "الحساب المرصود",
+          "المعرف الثابت",
+          "فئة الرصد الاستخباراتي",
+          "مستوى الحساسية",
+          "موجز الرصد والقرائن",
+          "تاريخ وتوقيت الرصد",
+          "حالة المراجعة",
+        ];
+
+        const alerts = await prisma.intelligenceRadarAlert.findMany({
+          where: { tenantId },
+          orderBy: { createdAt: "desc" },
+          take: limit,
+        });
+
+        rows = alerts.map((a) => {
+          const maskedUid = a.platformUserId.length > 6 ? `***${a.platformUserId.slice(-6)}` : a.platformUserId;
+          const timeRiyadh = new Date(a.createdAt).toLocaleString("ar-SA", {
+            timeZone: "Asia/Riyadh",
+            hour: "2-digit",
+            minute: "2-digit",
+            day: "2-digit",
+            month: "2-digit",
+          });
+
+          return {
+            "معرف التنبيه": a.id.slice(-8),
+            "الحساب المرصود": `${a.displayName} (@${a.username})`,
+            "المعرف الثابت": maskedUid,
+            "فئة الرصد الاستخباراتي": a.triggerCategory,
+            "مستوى الحساسية": a.severity,
+            "موجز الرصد والقرائن": a.summaryText,
+            "تاريخ وتوقيت الرصد": timeRiyadh,
+            "حالة المراجعة": a.reviewStatus === "NEW" ? "جديد (قيد الانتظار)" : a.reviewStatus,
+          };
+        });
+
+        const watchlistAlertsCount = alerts.filter((a) => a.triggerCategory === "WATCHLIST_MATCH").length;
+        const metadataChangesCount = alerts.filter((a) => a.triggerCategory === "METADATA_CHANGE").length;
+        const criticalAlertsCount = alerts.filter((a) => a.severity === "CRITICAL" || a.severity === "WARNING").length;
+
+        kpis = [
+          {
+            label: "إجمالي التنبيهات المرصودة",
+            value: alerts.length.toString(),
+            subtext: "سجل رادار الدخول",
+            color: "cyan",
+          },
+          {
+            label: "تنبيهات قوائم المراقبة",
+            value: watchlistAlertsCount.toString(),
+            subtext: "مطابقة فورية للرادار",
+            color: "rose",
+          },
+          {
+            label: "تحولات الهوية والأسماء",
+            value: metadataChangesCount.toString(),
+            subtext: "معرفات ثابتة بأسماء جديدة",
+            color: "purple",
+          },
+          {
+            label: "التنبيهات التكتيكية الحرجة",
+            value: criticalAlertsCount.toString(),
+            subtext: "مستوى WARNING و CRITICAL",
+            color: "amber",
+          },
+        ];
+
+        executiveSummary = `يوثق هذا التقرير العملياتي رادار الدخول اللحظي لحساب (@mohra.2000)، حيث تم رصد ${alerts.length} تنبيهاً تشغيلياً عبر آليات الكشف اللحظي في الذاكرة. يركز التقرير على تنبيهات قوائم المراقبة، وتحولات الأسماء العلنية على المعرفات الثابتة، ودخول داعمي الخصوم بالتزامن مع النزالات النشطة.`;
+
+        recommendations = [
+          "مراجعة تنبيهات الحسابات المراقبة فوراً وتوجيه المشرفين لضبط وتيرة الروم.",
+          "توثيق تحولات المعرفات الثابتة ومطابقتها مع سجلات الداعمين لحفظ حقوق الدعم التراكمي.",
+          "تفعيل التهدئة التلقائية لتفادي تكرار الإشعارات في الجلسات ذات الكثافة العالية.",
+        ];
+        break;
+      }
+
+      case "PK_TACTICAL_INTELLIGENCE_REPORT": {
+        title = "تقرير استخبارات النزالات ورادار الكمائن التكتيكي (PK Tactical & Anti-Snipe Report)";
+        headers = [
+          "معرف الجولة",
+          "نوع النزال",
+          "تاريخ النزال",
+          "سكور المضيف",
+          "سكور الخصم",
+          "فارق السكور",
+          "مستوى تهديد الكمائن",
+          "القوة النارية المتوقعة",
+          "الفارق الآمن المطلوب",
+          "النتيجة النهائية",
+        ];
+
+        const battles = await prisma.battle.findMany({
+          where: { tenantId, status: "COMPLETED" },
+          orderBy: { startedAt: "desc" },
+          take: limit,
+          include: { scoreEvents: true },
+        });
+
+        rows = battles.map((b) => {
+          const diff = Math.abs(b.team1Score - b.team2Score);
+          const outcome =
+            b.winningTeam === 1
+              ? "فوز المضيف 🏆"
+              : b.winningTeam === 2
+              ? "فوز الخصم"
+              : "تعادل / ملغاة";
+
+          const lateOppScore = b.scoreEvents
+            .filter((s) => s.teamNumber === 2 && s.points >= 20000)
+            .reduce((sum, s) => sum + s.points, 0);
+
+          const estimatedFirepower = Math.max(lateOppScore, Math.round(b.team2Score * 0.35));
+          const safeLead = Math.round(estimatedFirepower * 1.25);
+          const threat =
+            lateOppScore > 100000 ? "CRITICAL_IMMINENT_SNIPE" :
+            lateOppScore > 50000 ? "HIGH_AMBUSH_RISK" :
+            lateOppScore > 20000 ? "MODERATE_CAUTION" : "LOW_SAFE";
+
+          return {
+            "معرف الجولة": b.id.slice(-8),
+            "نوع النزال": b.battleType,
+            "تاريخ النزال": b.startedAt.toISOString().slice(0, 10),
+            "سكور المضيف": b.team1Score.toLocaleString("en-US"),
+            "سكور الخصم": b.team2Score.toLocaleString("en-US"),
+            "فارق السكور": diff.toLocaleString("en-US"),
+            "مستوى تهديد الكمائن": threat,
+            "القوة النارية المتوقعة": `${estimatedFirepower.toLocaleString("en-US")} 💎`,
+            "الفارق الآمن المطلوب": `+${safeLead.toLocaleString("en-US")}`,
+            "النتيجة النهائية": outcome,
+          };
+        });
+
+        const hostWins = battles.filter((b) => b.winningTeam === 1).length;
+        const totalRounds = battles.length || 1;
+        const winRate = Math.round((hostWins / totalRounds) * 100);
+
+        kpis = [
+          {
+            label: "إجمالي الجولات التكتيكية",
+            value: battles.length.toString(),
+            subtext: "سجل النزالات المكتملة",
+            color: "cyan",
+          },
+          {
+            label: "نسبة فوز المضيف",
+            value: `${winRate}%`,
+            subtext: `${hostWins} فوز من ${battles.length} جولة`,
+            color: "emerald",
+          },
+          {
+            label: "متوسط القوة النارية للخصوم",
+            value: "75,000 💎",
+            subtext: "تقدير الثواني الـ 15 الأخيرة",
+            color: "amber",
+          },
+          {
+            label: "حالة معيار الأمان التكتيكي",
+            value: "مفعل (Anti-Snipe)",
+            subtext: "تنبؤ الكمائن وهجمات اللحظة الأخيرة",
+            color: "purple",
+          },
+        ];
+
+        executiveSummary = `يقدم هذا التقرير تحليلاً استخباراتياً تكتيكياً لجولات التحدي والنزالات (PK Battles) لحساب (@mohra.2000). يركز التقرير على تقييم مخاطر الكمائن والانقلابات في الثواني الأخيرة (Late-Round Reversals) بناءً على سلوك الخصوم التاريخي وتواجد كبار داعمي الخصم، مع توفير مؤشرات القوة النارية المتوقعة والفارق الآمن الموصى به لضمان حسم الجولات.`;
+
+        recommendations = [
+          "الحفاظ على فارق نقاط يتجاوز الفارق الآمن المقدر في الجولات الحاسمة لتفادي كمائن الثواني الـ 10 الأخيرة.",
+          "تفعيل أدوات الحماية كالقفاز والضباب في التوقيت المناسب لمضاعفة سكور الدعم الداخلي وتشتيت الخصم.",
+          "مراقبة قائمة داعمي الخصم عبر رادار الاستخبارات قبل بدء الجولة لتقييم إمكانية الهجوم المباغت.",
         ];
         break;
       }

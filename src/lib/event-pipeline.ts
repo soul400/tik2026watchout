@@ -2,6 +2,7 @@ import { prisma } from "./prisma";
 import { ITikTokConnectorAdapter, NormalizedLiveEvent } from "./tiktok-types";
 import { BattleScoreResolver, BattleContext } from "./battle-score-resolver";
 import { TelegramService } from "./telegram-service";
+import { EnigmaRadarService } from "./enigma-radar-service";
 
 export interface EventPipelineStats {
   receivedCount: number;
@@ -19,6 +20,7 @@ export class LiveEventPipeline {
   };
 
   private sessionVipAlertsSent = new Set<string>();
+  private currentActiveBattleId: string | null = null;
 
   constructor(
     private tenantId: string,
@@ -352,6 +354,12 @@ export class LiveEventPipeline {
       const actor = this.extractActor(data);
       if (actor.platformUserId && !actor.platformUserId.startsWith("guest_")) {
         await this.checkAndTriggerVipAlert(actor.platformUserId, actor.username, actor.displayName);
+        // Non-blocking real-time Enigma Entry Radar evaluation
+        EnigmaRadarService.evaluateEntrance(actor, {
+          tenantId: this.tenantId,
+          liveSessionId: this.liveSessionId,
+          activeBattleId: this.currentActiveBattleId,
+        }).catch(() => {});
       }
     } catch {
       // non-blocking
@@ -367,6 +375,7 @@ export class LiveEventPipeline {
       const action = Number(data.action || 0);
       // Action 4: OPEN, Action 5: FINISH, Action 6: CUT_SHORT
       if (action === 5 || action === 6) {
+        this.currentActiveBattleId = null;
         // Battle finished
         BattleScoreResolver.resetBattleTracking(battleId);
         await prisma.battle.updateMany({
@@ -410,6 +419,8 @@ export class LiveEventPipeline {
         }
         return;
       }
+
+      this.currentActiveBattleId = battleId;
 
       // Check if battle already exists or create it
       const existing = await prisma.battle.findUnique({

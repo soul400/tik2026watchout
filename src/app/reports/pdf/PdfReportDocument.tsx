@@ -55,6 +55,12 @@ export function PdfReportDocument({
         return Fingerprint;
       case "SUPPORTER_PRESENCE_PATTERN":
         return Clock;
+      case "ENIGMA_COMPARISON_PDF":
+        return Fingerprint;
+      case "ENIGMA_ENTRY_RADAR_REPORT":
+        return ShieldCheck;
+      case "PK_TACTICAL_INTELLIGENCE_REPORT":
+        return Swords;
       default:
         return Scale;
     }

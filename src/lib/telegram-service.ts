@@ -149,7 +149,7 @@ export class TelegramService {
    */
   static async sendMessage(
     tenantId: string,
-    alertType: "VIP_ENTRY" | "ENIGMA_UNMASKED" | "DAILY_CHAMPIONS" | "DAILY_STQI" | "BATTLE_SCORE" | "BATTLE_END" | "TEST",
+    alertType: "VIP_ENTRY" | "ENIGMA_UNMASKED" | "DAILY_CHAMPIONS" | "DAILY_STQI" | "BATTLE_SCORE" | "BATTLE_END" | "TEST" | "RADAR_ALERT",
     messageHtml: string,
     metadata?: any,
     overrideToken?: string,
@@ -651,6 +651,67 @@ export class TelegramService {
     return await this.sendMessage(tenantId, "VIP_ENTRY", msg, {
       supporterUsername: supporter.username,
       totalDiamonds: supporter.totalDiamonds,
+    });
+  }
+
+  /**
+   * 1.1 Alert: رادار الدخول اللحظي (Entry Radar Alert)
+   */
+  static async sendRadarAlert(
+    tenantId: string,
+    alert: {
+      platformUserId: string;
+      username: string;
+      displayName: string;
+      triggerCategory: string;
+      severity: string;
+      summaryText: string;
+      details?: Record<string, any>;
+    }
+  ): Promise<{ success: boolean; error?: string }> {
+    const config = await this.getConfig(tenantId);
+    if (!config.isEnabled) {
+      return { success: false, error: "خدمة تليقرام معطلة." };
+    }
+
+    const timeString = new Date().toLocaleTimeString("ar-SA", {
+      timeZone: "Asia/Riyadh",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+
+    const categoryIcons: Record<string, string> = {
+      WATCHLIST_MATCH: "🎯 <b>[رادار: رصد حساب تحت المراقبة]</b>",
+      METADATA_CHANGE: "🔄 <b>[رادار: تحول في الهوية العلنية]</b>",
+      OPPONENT_SUPPORTER: "⚠️ <b>[رادار تكتيكي: داعم مسجل للخصم]</b>",
+      POTENTIAL_HANDOVER: "⏳ <b>[رادار: تسلسل تعاقبي مشبوه]</b>",
+      KNOWN_ACCOUNT_ENTRY: "💎 <b>[رادار: عودة داعم رئيسي]</b>",
+      HIGH_IMPACT_POTENTIAL: "🔥 <b>[رادار: قدرة نيران مرتفعة]</b>",
+    };
+
+    const header = categoryIcons[alert.triggerCategory] || "📡 <b>[تنبيه رادار الدخول اللحظي]</b>";
+    const maskedUid =
+      alert.platformUserId && alert.platformUserId.length > 6
+        ? `***${alert.platformUserId.slice(-6)}`
+        : alert.platformUserId || "N/A";
+
+    const msg = `${header}
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>الحساب:</b> ${alert.displayName} (@${alert.username})
+🆔 <b>المعرف الثابت:</b> <code>${maskedUid}</code>
+🕒 <b>التوقيت:</b> ${timeString} بتوقيت الرياض
+📊 <b>مستوى الحساسية:</b> ${alert.severity}
+━━━━━━━━━━━━━━━━━━━━
+📝 <b>موجز الرصد:</b>
+${alert.summaryText}
+
+<i>🔗 يمكن متابعة الحالة ومقارنتها عبر معمل الاستخبارات بالمنصة.</i>`;
+
+    return await this.sendMessage(tenantId, "RADAR_ALERT", msg, {
+      triggerCategory: alert.triggerCategory,
+      platformUserId: alert.platformUserId,
+      username: alert.username,
     });
   }
 
@@ -1647,6 +1708,205 @@ ${outcomeBanner}
             `• \`/report_champions\` — أبطال المجتمع والتفاعل الطبيعي`;
         } else {
           reply = `⚠️ تعذر توليد أو إرسال تقرير الـ PDF: ${pdfRes.error || "خطأ غير متوقع"}`;
+        }
+        break;
+      }
+
+      case "/radar_on": {
+        const { IntelligenceLabService } = await import("./intelligence-lab-service");
+        await IntelligenceLabService.updateSettings(tenantId, { radarEnabled: true, telegramRadarAlerts: true });
+        reply = `🟢 *تم تفعيل رادار الدخول اللحظي وتنبيهات تليقرام بنجاح!*`;
+        break;
+      }
+
+      case "/radar_off": {
+        const { IntelligenceLabService } = await import("./intelligence-lab-service");
+        await IntelligenceLabService.updateSettings(tenantId, { telegramRadarAlerts: false });
+        reply = `⏸️ *تم كتم تنبيهات الرادار اللحظية إلى تليقرام مؤقتاً.* (تظل المراقبة الداخلية عبر الويب نشطة).`;
+        break;
+      }
+
+      case "/radar_status": {
+        const { IntelligenceLabService } = await import("./intelligence-lab-service");
+        const overview = await IntelligenceLabService.getCommandCenterOverview(tenantId);
+        const settings = await IntelligenceLabService.getSettings(tenantId);
+
+        reply = `📡 *حالة رادار الاستخبارات والمراقبة*\n\n` +
+          `• حالة الرادار: ${settings.radarEnabled ? "🟢 نشط ويعمل" : "🔴 معطل"}\n` +
+          `• تنبيهات تليقرام: ${settings.telegramRadarAlerts ? "🔔 مفعلة" : "🔕 مكتومة"}\n` +
+          `• الحسابات تحت المراقبة (Watchlist): *${overview.metrics.activeWatchlistCount} حساب*\n` +
+          `• تنبيهات الرادار الأخيرة: *${overview.metrics.recentRadarAlertsCount} تنبيه*\n` +
+          `• تحولات المعرفات والأسماء المسجلة: *${overview.metrics.verifiedAliasChangesCount} سجل*\n` +
+          `• حداثة تدفق البيانات: *${overview.dataFreshnessSeconds} ثانية*`;
+        break;
+      }
+
+      case "/watch": {
+        const parts = rawText.split(/\s+/);
+        const targetUser = parts[1]?.replace("@", "").trim();
+        const reason = parts.slice(2).join(" ").trim() || "مراقبة يدوية بتكليف من المشغل";
+
+        if (!targetUser) {
+          reply = `⚠️ صيغة الأمر: \`/watch <username> [سبب المراقبة]\`\nمثال: \`/watch user123 اشتباه في تحركات النزالات\``;
+        } else {
+          const { IntelligenceLabService } = await import("./intelligence-lab-service");
+          await IntelligenceLabService.addToWatchlist(tenantId, {
+            username: targetUser,
+            reason,
+            category: "CUSTOM",
+            severity: "HIGH",
+          });
+          reply = `✅ *تمت إضافة الحساب (@${targetUser}) إلى قائمة المراقبة الاستخباراتية بنجاح!* سيتم إشعارك فور دخوله الروم.`;
+        }
+        break;
+      }
+
+      case "/unmask": {
+        const parts = rawText.split(/\s+/);
+        const targetUser = parts[1]?.replace("@", "").trim();
+        if (!targetUser) {
+          reply = `⚠️ صيغة الأمر: \`/unmask <username>\`\nمثال: \`/unmask mohra.2000\``;
+        } else {
+          const supp = await prisma.supporter.findFirst({
+            where: {
+              tenantId,
+              OR: [{ username: targetUser }, { platformUserId: targetUser }],
+            },
+          });
+
+          if (!supp) {
+            reply = `🔍 لم يتم العثور على أي سجلات مطابقة للحساب (@${targetUser}) في قاعدة بيانات المنصة.`;
+          } else {
+            const aliases = await prisma.intelligenceAliasHistory.findMany({
+              where: { tenantId, platformUserId: supp.platformUserId },
+              orderBy: { observedAt: "desc" },
+              take: 5,
+            });
+
+            const maskedUid = supp.platformUserId.length > 6 ? `***${supp.platformUserId.slice(-6)}` : supp.platformUserId;
+            let aliasText = "لا توجد تحولات سابقة مسجلة لليوزر.";
+            if (aliases.length > 0) {
+              aliasText = aliases
+                .map((a) => `  • ${a.changeType}: من (@${a.previousUsername || "غياب"}) إلى (@${a.newUsername}) بتاريخ ${a.observedAt.toISOString().slice(0, 10)}`)
+                .join("\n");
+            }
+
+            reply = `🕵️ *ملف تدقيق الحساب الاستخباراتي*\n\n` +
+              `• الحساب: *${supp.displayName}* (@${supp.username})\n` +
+              `• المعرّف الثابت (UID/SecUID): \`${maskedUid}\`\n` +
+              `• إجمالي الدعم المسجل: *${supp.totalDiamonds.toLocaleString()} 💎*\n` +
+              `• التصنيف: *${supp.category}*\n` +
+              `• أول ظهور: ${supp.firstObservedAt.toISOString().slice(0, 10)}\n` +
+              `• آخر ظهور: ${supp.lastObservedAt.toISOString().slice(0, 10)}\n\n` +
+              `📜 *سجل التحولات التاريخية (Alias History):*\n${aliasText}\n\n` +
+              `<i>💡 يمكن إجراء مقارنة جنائية كاملة عبر معمل الاستخبارات.</i>`;
+          }
+        }
+        break;
+      }
+
+      case "/compare": {
+        const parts = rawText.split(/\s+/);
+        const userA = parts[1]?.replace("@", "").trim();
+        const userB = parts[2]?.replace("@", "").trim();
+
+        if (!userA || !userB) {
+          reply = `⚠️ صيغة الأمر: \`/compare <accountA> <accountB>\`\nمثال: \`/compare userA userB\``;
+        } else {
+          try {
+            const { ForensicComparisonService } = await import("./forensic-comparison-service");
+            const comp = await ForensicComparisonService.compareAccounts({
+              tenantId,
+              accountAIdentifier: userA,
+              accountBIdentifier: userB,
+            });
+
+            reply = `🔬 *نتيجة المقارنة الجنائية والسلوكية*\n\n` +
+              `• الطرف الأول: *${comp.accountA.displayName}* (@${comp.accountA.username})\n` +
+              `• الطرف الثاني: *${comp.accountB.displayName}* (@${comp.accountB.username})\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n` +
+              `📊 *مؤشر التشابه السلوكي العام:* *${comp.synthesis.overallSimilarityScore}%* (${comp.synthesis.confidenceBand})\n` +
+              `⚖️ *الحكم المقترح:* \`${comp.synthesis.suggestedVerdict}\`\n` +
+              `• تشابه توزيع الهدايا (Cosine): *${comp.giftDistribution.cosineSimilarity}*\n` +
+              `• توافق ساعات اليوم (Circadian): *${comp.circadian.correlationScore}*\n` +
+              `• أحداث التعاقب الزمني (Handover): *${comp.temporal.potentialHandoverEventsCount} حالة*\n` +
+              `• الأحداث المتزامنة (Simultaneous): *${comp.temporal.simultaneousEventCount} حدث*\n\n` +
+              `📌 *ملاحظة هامة:* ${comp.synthesis.disclaimer}`;
+          } catch (err: any) {
+            reply = `⚠️ تعذر إتمام المقارنة: ${err?.message || "خطأ غير متوقع"}`;
+          }
+        }
+        break;
+      }
+
+      case "/scout": {
+        const parts = rawText.split(/\s+/);
+        const oppName = parts[1]?.replace("@", "").trim();
+        if (!oppName) {
+          reply = `⚠️ صيغة الأمر: \`/scout <opponent_username>\`\nمثال: \`/scout rival_name\``;
+        } else {
+          const battles = await prisma.battle.findMany({
+            where: {
+              tenantId,
+              participants: {
+                some: { username: oppName, teamNumber: 2 },
+              },
+            },
+            take: 10,
+            orderBy: { startedAt: "desc" },
+          });
+
+          if (battles.length === 0) {
+            reply = `🔍 لم يتم العثور على نزالات سابقة مسجلة ضد المنافس (@${oppName}).`;
+          } else {
+            const oppWins = battles.filter((b) => b.winningTeam === 2).length;
+            const avgScore = Math.round(
+              battles.reduce((sum, b) => sum + b.team2Score, 0) / battles.length
+            );
+
+            reply = `🛡️ *ملف استخبارات المنافس (@${oppName})*\n\n` +
+              `• إجمالي النزالات الموثقة: *${battles.length} جولة*\n` +
+              `• فوز المنافس: *${oppWins}* | فوز المضيف: *${battles.length - oppWins}*\n` +
+              `• متوسط سكور المنافس: *${avgScore.toLocaleString()} نقطة*\n` +
+              `• نسبة الفوز للمنافس: *${Math.round((oppWins / battles.length) * 100)}%*`;
+          }
+        }
+        break;
+      }
+
+      case "/snipe_check": {
+        const activeBattle = await prisma.battle.findFirst({
+          where: { tenantId, status: "IN_PROGRESS" },
+          include: { participants: true },
+        });
+
+        if (!activeBattle) {
+          reply = `⚔️ لا توجد جولة تحدي نشطة حالياً لإجراء تقييم الكمائن اللحظي.`;
+        } else {
+          const { AntiSnipePredictorService } = await import("./anti-snipe-predictor-service");
+          const opps = activeBattle.participants.filter((p) => p.teamNumber === 2).map((p) => p.username);
+          const pred = await AntiSnipePredictorService.evaluateBattleRisk(tenantId, {
+            battleId: activeBattle.id,
+            battleType: activeBattle.battleType as any,
+            team1Score: activeBattle.team1Score,
+            team2Score: activeBattle.team2Score,
+            opponentUsernames: opps,
+            timeRemainingSeconds: 45,
+          });
+
+          const threatEmoji =
+            pred.threatLevel === "CRITICAL_IMMINENT_SNIPE" ? "🔴" :
+            pred.threatLevel === "HIGH_AMBUSH_RISK" ? "🟠" :
+            pred.threatLevel === "MODERATE_CAUTION" ? "🟡" : "🟢";
+
+          reply = `🎯 *تقرير رادار الكمائن اللحظي (Anti-Snipe)* 🛡️\n\n` +
+            `• مستوى التهديد: ${threatEmoji} *${pred.threatLevel}*\n` +
+            `• مؤشر خطر الكمين: *${pred.snipeRiskScore}%*\n` +
+            `• النتيجة الحالية: المضيف (*${activeBattle.team1Score.toLocaleString()}*) vs الخصم (*${activeBattle.team2Score.toLocaleString()}*)\n` +
+            `• فارق السكور: *${Math.abs(activeBattle.team1Score - activeBattle.team2Score).toLocaleString()}*\n` +
+            `• القوة النارية المتوقعة للخصم: *${pred.estimatedSnipeFirepower.toLocaleString()} 💎*\n` +
+            `• الفارق الآمن الموصى به: *+${pred.safeLeadBufferRequired.toLocaleString()} نقطة*\n\n` +
+            `⚠️ *ملاحظة:* ${pred.predictionLimitations[0]}`;
         }
         break;
       }

@@ -39,6 +39,11 @@ model Tenant {
   auditLogs          AuditLog[]
   telegramConfig     TelegramConfig?
   telegramLogs       TelegramNotificationLog[]
+  aliasHistories     IntelligenceAliasHistory[]
+  intelligenceWatchlists IntelligenceWatchlist[]
+  intelligenceRadarAlerts IntelligenceRadarAlert[]
+  intelligenceCases  IntelligenceInvestigationCase[]
+  intelligenceSettings IntelligenceSettings?
 }
 
 model User {
@@ -168,6 +173,8 @@ model Supporter {
   externalActivations ExternalActivation[]
   ledgerMovements  ToolLedgerMovement[]
   battleScoreEvents BattleScoreEvent[]
+  aliasHistories   IntelligenceAliasHistory[]
+  radarAlerts      IntelligenceRadarAlert[]
 
   @@unique([tenantId, platformUserId])
   @@index([tenantId, totalDiamonds])
@@ -530,4 +537,117 @@ model TelegramNotificationLog {
 
   @@index([tenantId, createdAt])
 }
+
+// -------------------------------------------------------------
+// 12. Intelligence Lab (معمل استخبارات)
+// -------------------------------------------------------------
+
+model IntelligenceAliasHistory {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  supporterId         String?
+  platformUserId      String
+  previousUsername    String?
+  newUsername         String
+  previousDisplayName String?
+  newDisplayName      String
+  previousAvatarUrl   String?
+  newAvatarUrl        String?
+  changeType          String   // USERNAME_CHANGE, DISPLAY_NAME_CHANGE, AVATAR_CHANGE, ENIGMA_MASK_ACTIVATION, ENIGMA_MASK_DEACTIVATION
+  source              String   @default("LIVE_EVENT") // LIVE_EVENT, HISTORICAL_SYNC, MANUAL
+  observedAt          DateTime @default(now())
+  rawEventId          String?
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supporter Supporter? @relation(fields: [supporterId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, platformUserId])
+  @@index([tenantId, observedAt])
+}
+
+model IntelligenceWatchlist {
+  id             String   @id @default(cuid())
+  tenantId       String
+  platformUserId String?
+  username       String
+  displayName    String?
+  reason         String
+  category       String   @default("SUSPECTED_ALT") // SUSPECTED_ALT, RIVAL_SNIPER, HIGH_VALUE_OBSERVE, ENIGMA_ORIGIN, CUSTOM
+  severity       String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  isActive       Boolean  @default(true)
+  notifyOnEntry  Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, username])
+  @@index([tenantId, platformUserId])
+}
+
+model IntelligenceRadarAlert {
+  id                String   @id @default(cuid())
+  tenantId          String
+  liveSessionId     String?
+  supporterId       String?
+  platformUserId    String
+  username          String
+  displayName       String
+  triggerCategory   String   // KNOWN_ACCOUNT_ENTRY, METADATA_CHANGE, POTENTIAL_HANDOVER, OPPONENT_SUPPORTER, WATCHLIST_MATCH, HIGH_IMPACT_POTENTIAL
+  severity          String   @default("INFO") // INFO, NOTICE, WARNING, CRITICAL
+  summaryText       String
+  detailsJson       String   // structured evidence
+  reviewStatus      String   @default("NEW") // NEW, REVIEWED, DISMISSED, ACTIONED
+  telegramSent      Boolean  @default(false)
+  telegramMessageId String?
+  createdAt         DateTime @default(now())
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supporter Supporter? @relation(fields: [supporterId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, triggerCategory])
+  @@index([tenantId, reviewStatus])
+}
+
+model IntelligenceInvestigationCase {
+  id                      String   @id @default(cuid())
+  tenantId                String
+  caseNumber              String   // e.g. CASE-2026-001
+  title                   String
+  primaryPlatformUserId   String
+  secondaryPlatformUserId String?
+  verdictStatus           String   @default("NEEDS_REVIEW") // VERIFIED_IDENTIFIER_MATCH, PUBLIC_ALIAS_HISTORY, BEHAVIORAL_SIMILARITY, NEEDS_REVIEW, CONFLICTING_EVIDENCE, UNRESOLVED, DISMISSED
+  similarityScore         Float?
+  evidenceSummary         String
+  evidenceDetailsJson     String   // metrics, cosine similarity, circadian matrix, battle crossovers
+  assignedTo              String?
+  notes                   String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, caseNumber])
+  @@index([tenantId, verdictStatus])
+}
+
+model IntelligenceSettings {
+  id                          String   @id @default(cuid())
+  tenantId                    String   @unique
+  radarEnabled                Boolean  @default(true)
+  telegramRadarAlerts         Boolean  @default(true)
+  notifyWatchlistEntries      Boolean  @default(true)
+  notifyMetadataChanges       Boolean  @default(true)
+  notifyOpponentSupporters    Boolean  @default(true)
+  cooldownMinutes             Int      @default(30)
+  minTacticalRiskAlert        Int      @default(65) // 0 - 100
+  minBehavioralSimilarityAlert Int     @default(75) // 0 - 100
+  autoSyncEnigmaOnConnect     Boolean  @default(true)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
 

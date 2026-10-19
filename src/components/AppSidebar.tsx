@@ -15,10 +15,12 @@ import {
   FileText,
   Settings,
   Sparkles,
+  Radar,
 } from "lucide-react";
 
 const navigation = [
   { name: "غرفة المراقبة الحية", href: "/", icon: LayoutDashboard },
+  { name: "معمل الاستخبارات", href: "/intelligence", icon: Radar },
   { name: "خزينة الأدوات الذكية", href: "/inventory", icon: Shield },
   { name: "النزالات 1v1 و 2v2", href: "/battles", icon: Swords },
   { name: "ذكاء الداعمين", href: "/supporters", icon: Users },

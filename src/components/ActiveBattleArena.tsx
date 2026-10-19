@@ -34,6 +34,11 @@ interface ActiveBattleArenaProps {
 export function ActiveBattleArena({ initialBattle, streamer, isLive }: ActiveBattleArenaProps) {
   const [battle, setBattle] = useState<BattleData | null>(initialBattle);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [hasMounted, setHasMounted] = useState(false);
+
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
 
   // Real-time polling every 2.5s for live battle status
   useEffect(() => {
@@ -163,7 +168,9 @@ export function ActiveBattleArena({ initialBattle, streamer, isLive }: ActiveBat
 
             <div className="text-xs font-mono text-secondaryText flex items-center gap-2">
               <Clock className="w-3.5 h-3.5 text-secondaryText" />
-              <span>مباشر من تيك توك • مزامنة: {lastUpdated.toLocaleTimeString("ar-SA")}</span>
+              <span suppressHydrationWarning>
+                مباشر من تيك توك • مزامنة: {hasMounted ? lastUpdated.toLocaleTimeString("ar-SA") : "الآن"}
+              </span>
             </div>
           </div>
 

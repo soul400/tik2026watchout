@@ -1,0 +1,197 @@
+{
+  "description": "Sanitized sample TikTok Live Battle Item Card events captured by the LivePulse event pipeline",
+  "protocol": "TikTok WebcastLinkMicBattleItemCard",
+  "samples": [
+    {
+      "eventType": "awardCardNotice",
+      "comment": "Award notice emitted when battle mission/task rewards power-up cards to supporters",
+      "payload": {
+        "msgType": 4,
+        "battleId": "7696870841917672199",
+        "awardCardNotice": {
+          "noticeId": "notice_7696870841917672199_award_1",
+          "cardType": 2,
+          "cardName": "Boosting Glove",
+          "toolKey": "GLOVE",
+          "count": 1,
+          "displayContent": {
+            "key": "pm_mt_match_guide_gotPowerUps",
+            "defaultPattern": "Contributors got match power-ups.",
+            "defaultFormat": {
+              "color": "#ffffffff",
+              "bold": false,
+              "italic": false,
+              "weight": 400
+            },
+            "pieces": [
+              {
+                "type": 1,
+                "stringValue": "Boosting Glove x1"
+              }
+            ]
+          },
+          "awardedUsers": [
+            {
+              "user": {
+                "userId": "6997635189762556933",
+                "displayId": "supporter_alpha",
+                "nickName": "داعم تكتيكي #1",
+                "avatarThumb": {
+                  "urlList": ["https://p16-sign.tiktokcdn.com/tos-alisg-avt-0068/avatar1.webp"]
+                }
+              },
+              "count": 1,
+              "cardType": "GLOVE"
+            },
+            {
+              "user": {
+                "userId": "7035754302238327814",
+                "displayId": "supporter_beta",
+                "nickName": "داعم تكتيكي #2",
+                "avatarThumb": {
+                  "urlList": ["https://p16-sign.tiktokcdn.com/tos-alisg-avt-0068/avatar2.webp"]
+                }
+              },
+              "count": 1,
+              "cardType": "GLOVE"
+            }
+          ]
+        },
+        "topLevelKeys": [
+          "battleId",
+          "msgType",
+          "cardObtainGuide",
+          "useCriticalStrikeCard",
+          "useSmokeCard",
+          "awardCardNotice",
+          "useExtraTimeCard",
+          "useSpecialEffectCard",
+          "usePotionCard",
+          "useWaveCard",
+          "specialEffectNotice",
+          "useTop2Card",
+          "useTop3Card",
+          "useVaultGloveCard",
+          "awardReason"
+        ]
+      }
+    },
+    {
+      "eventType": "useCriticalStrikeCard",
+      "comment": "Consumption notice emitted when a supporter activates the Boosting Glove (Critical Strike x5) during a round",
+      "payload": {
+        "msgType": 2,
+        "battleId": "7696870841917672199",
+        "useCriticalStrikeCard": {
+          "cardInfo": {
+            "cardType": "GLOVE",
+            "cardName": "Boosting Glove x5",
+            "multiplier": 5,
+            "durationSeconds": 15,
+            "sendUser": {
+              "userId": "6983765695083643909",
+              "displayId": "supporter_champion",
+              "nickName": "بطل النزال",
+              "avatarThumb": {
+                "urlList": ["https://p16-sign.tiktokcdn.com/tos-alisg-avt-0068/avatar3.webp"]
+              }
+            }
+          }
+        },
+        "topLevelKeys": [
+          "battleId",
+          "msgType",
+          "cardObtainGuide",
+          "useCriticalStrikeCard",
+          "useSmokeCard",
+          "awardCardNotice",
+          "useExtraTimeCard",
+          "useSpecialEffectCard",
+          "usePotionCard",
+          "useWaveCard",
+          "specialEffectNotice",
+          "useTop2Card",
+          "useTop3Card",
+          "useVaultGloveCard",
+          "awardReason"
+        ]
+      }
+    },
+    {
+      "eventType": "useSmokeCard",
+      "comment": "Consumption notice emitted when a supporter activates the Boost Fog / Magic Mist (Score Blindness) card",
+      "payload": {
+        "msgType": 3,
+        "battleId": "7696870841917672199",
+        "useSmokeCard": {
+          "cardInfo": {
+            "cardType": "BOOST_FOG",
+            "cardName": "Magic Mist / Boost Fog",
+            "durationSeconds": 30,
+            "sendUser": {
+              "userId": "7035754302238327814",
+              "displayId": "supporter_beta",
+              "nickName": "داعم تكتيكي #2",
+              "avatarThumb": {
+                "urlList": ["https://p16-sign.tiktokcdn.com/tos-alisg-avt-0068/avatar2.webp"]
+              }
+            }
+          }
+        },
+        "topLevelKeys": [
+          "battleId",
+          "msgType",
+          "cardObtainGuide",
+          "useCriticalStrikeCard",
+          "useSmokeCard",
+          "awardCardNotice",
+          "useExtraTimeCard",
+          "useSpecialEffectCard",
+          "usePotionCard",
+          "useWaveCard",
+          "specialEffectNotice",
+          "useTop2Card",
+          "useTop3Card",
+          "useVaultGloveCard",
+          "awardReason"
+        ]
+      }
+    },
+    {
+      "eventType": "useExtraTimeCard",
+      "comment": "Consumption notice emitted when Extra Time (+10s or +15s) card is activated",
+      "payload": {
+        "msgType": 5,
+        "battleId": "7696890154125970182",
+        "useExtraTimeCard": {
+          "cardInfo": {
+            "cardType": "TIME_EXTENDER",
+            "addedSeconds": 10,
+            "sendUser": {
+              "userId": "6997635189762556933",
+              "displayId": "supporter_alpha"
+            }
+          }
+        }
+      }
+    },
+    {
+      "eventType": "useSpecialEffectCard",
+      "comment": "Consumption notice emitted when Victory Hammer / Stun card is activated",
+      "payload": {
+        "msgType": 6,
+        "battleId": "7696870841917672199",
+        "useSpecialEffectCard": {
+          "cardInfo": {
+            "cardType": "HAMMER",
+            "effectType": "STUN_OPPONENT",
+            "sendUser": {
+              "userId": "6983765695083643909",
+              "displayId": "supporter_champion"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

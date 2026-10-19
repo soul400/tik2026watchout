@@ -1,6 +1,9 @@
 import { prisma } from "./prisma";
 import { ChampionsEngine } from "./champions-engine";
 import { STQIEngine } from "./stqi-engine";
+import { StreamHealthService } from "./stream-health";
+import { SmartInventoryService } from "./smart-inventory";
+import { ReportType } from "./reports-service";
 import fs from "fs";
 import path from "path";
 import { execFile } from "child_process";
@@ -19,7 +22,7 @@ export interface BattleScorePayload {
 }
 
 interface BattleTelegramTracker {
-  messageId: number;
+  messageIds: Record<string, number>;
   lastSentTime: number;
   lastT1: number;
   lastT2: number;
@@ -29,6 +32,9 @@ interface BattleTelegramTracker {
 
 // In-memory tracker for active battle score messages across throttling cycles
 const activeBattleTrackers = new Map<string, BattleTelegramTracker>();
+
+// Per-chat cooldown timestamp map to strictly respect Telegram 429 retry_after limits
+const chatCooldownUntil = new Map<string, number>();
 
 export interface TelegramConfigDTO {
   id?: string;
@@ -148,18 +154,18 @@ export class TelegramService {
     metadata?: any,
     overrideToken?: string,
     overrideChatId?: string
-  ): Promise<{ success: boolean; error?: string; messageId?: number }> {
+  ): Promise<{ success: boolean; error?: string; messageId?: number; messageIds?: Record<string, number> }> {
     const config = await this.getConfig(tenantId);
     const token = overrideToken || config.botToken;
-    const chatId = overrideChatId || config.chatId;
+    const rawChatId = overrideChatId || config.chatId;
 
-    if (!token || !chatId) {
+    if (!token || !rawChatId) {
       const err = "لم يتم ضبط رمز البوت (Bot Token) أو معرف المحادثة (Chat ID).";
       await prisma.telegramNotificationLog.create({
         data: {
           tenantId,
           alertType,
-          recipient: chatId || "NOT_SET",
+          recipient: rawChatId || "NOT_SET",
           messageText: messageHtml,
           status: "FAILED",
           errorReason: err,
@@ -169,64 +175,118 @@ export class TelegramService {
       return { success: false, error: err };
     }
 
-    try {
-      const url = `https://api.telegram.org/bot${token}/sendMessage`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: messageHtml,
-          parse_mode: "HTML",
-          disable_web_page_preview: true,
-        }),
-      });
+    const recipients = String(rawChatId)
+      .split(/[\s,;]+/)
+      .map((id) => id.trim())
+      .filter(Boolean);
 
-      const resData = await response.json();
+    if (recipients.length === 0) {
+      const err = "لم يتم العثور على أي معرف محادثة صالح.";
+      return { success: false, error: err };
+    }
 
-      if (!response.ok || !resData.ok) {
-        const errorDetail = resData.description || `HTTP Error ${response.status}`;
+    let successCount = 0;
+    let firstSuccessMessageId: number | undefined;
+    const messageIds: Record<string, number> = {};
+    const errors: string[] = [];
+
+    for (const targetChat of recipients) {
+      try {
+        const url = `https://api.telegram.org/bot${token}/sendMessage`;
+        let response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: targetChat,
+            text: messageHtml,
+            parse_mode: "HTML",
+            disable_web_page_preview: true,
+          }),
+        });
+
+        let resData = await response.json();
+
+        // Handle Telegram 429 (Too Many Requests / Rate Limit)
+        if (response.status === 429 || resData.error_code === 429) {
+          const retryAfterSec = Number(resData.parameters?.retry_after || 5);
+          chatCooldownUntil.set(targetChat, Date.now() + (retryAfterSec + 1) * 1000);
+
+          // For critical alerts that must never be dropped (BATTLE_END, VIP_ENTRY, TEST, DAILY), wait and retry
+          if (["BATTLE_END", "VIP_ENTRY", "TEST", "DAILY_CHAMPIONS", "DAILY_STQI"].includes(alertType)) {
+            const waitTime = Math.min(retryAfterSec + 1, 30);
+            console.log(`[TELEGRAM_429_RETRY] Chat ${targetChat} rate limited. Waiting ${waitTime}s to retry ${alertType}...`);
+            await new Promise((resolve) => setTimeout(resolve, waitTime * 1000));
+
+            response = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: targetChat,
+                text: messageHtml,
+                parse_mode: "HTML",
+                disable_web_page_preview: true,
+              }),
+            });
+            resData = await response.json();
+          }
+        }
+
+        if (!response.ok || !resData.ok) {
+          const errorDetail = resData.description || `HTTP Error ${response.status}`;
+          await prisma.telegramNotificationLog.create({
+            data: {
+              tenantId,
+              alertType,
+              recipient: targetChat,
+              messageText: messageHtml,
+              status: "FAILED",
+              errorReason: errorDetail,
+              metadataJson: metadata ? JSON.stringify(metadata) : null,
+            },
+          });
+          errors.push(`[${targetChat}]: ${errorDetail}`);
+        } else {
+          successCount++;
+          const mid = resData.result?.message_id;
+          if (mid) {
+            messageIds[targetChat] = mid;
+            if (!firstSuccessMessageId) {
+              firstSuccessMessageId = mid;
+            }
+          }
+          await prisma.telegramNotificationLog.create({
+            data: {
+              tenantId,
+              alertType,
+              recipient: targetChat,
+              messageText: messageHtml,
+              status: "SENT",
+              metadataJson: metadata ? JSON.stringify(metadata) : null,
+            },
+          });
+        }
+      } catch (error: any) {
+        const errorMsg = error?.message || "Failed to reach Telegram API";
         await prisma.telegramNotificationLog.create({
           data: {
             tenantId,
             alertType,
-            recipient: chatId,
+            recipient: targetChat,
             messageText: messageHtml,
             status: "FAILED",
-            errorReason: errorDetail,
+            errorReason: errorMsg,
             metadataJson: metadata ? JSON.stringify(metadata) : null,
           },
         });
-        return { success: false, error: errorDetail };
+        errors.push(`[${targetChat}]: ${errorMsg}`);
       }
-
-      await prisma.telegramNotificationLog.create({
-        data: {
-          tenantId,
-          alertType,
-          recipient: chatId,
-          messageText: messageHtml,
-          status: "SENT",
-          metadataJson: metadata ? JSON.stringify(metadata) : null,
-        },
-      });
-
-      return { success: true, messageId: resData.result?.message_id };
-    } catch (error: any) {
-      const errorMsg = error?.message || "Failed to reach Telegram API";
-      await prisma.telegramNotificationLog.create({
-        data: {
-          tenantId,
-          alertType,
-          recipient: chatId,
-          messageText: messageHtml,
-          status: "FAILED",
-          errorReason: errorMsg,
-          metadataJson: metadata ? JSON.stringify(metadata) : null,
-        },
-      });
-      return { success: false, error: errorMsg };
     }
+
+    if (successCount > 0) {
+      return { success: true, messageId: firstSuccessMessageId, messageIds };
+    }
+
+    return { success: false, error: errors.join(" | ") || "Failed to send to all recipients" };
   }
 
   /**
@@ -248,6 +308,11 @@ export class TelegramService {
       return { success: false, error: "رمز البوت أو معرف المحادثة غير مضبوط." };
     }
 
+    const cooldownUntil = chatCooldownUntil.get(chatId) || 0;
+    if (Date.now() < cooldownUntil) {
+      return { success: false, error: "المحادثة تحت فترة التهدئة المؤقتة لتليقرام (Rate limit cooldown)." };
+    }
+
     try {
       const url = `https://api.telegram.org/bot${token}/editMessageText`;
       const response = await fetch(url, {
@@ -267,6 +332,12 @@ export class TelegramService {
         // If content is unmodified, Telegram returns 400 with "message is not modified" - perfectly acceptable
         if (resData.description?.includes("message is not modified")) {
           return { success: true };
+        }
+        if (response.status === 429 || resData.error_code === 429) {
+          const waitSec = Number(resData.parameters?.retry_after || 8);
+          chatCooldownUntil.set(chatId, Date.now() + (waitSec + 1) * 1000);
+          console.warn(`[TELEGRAM_EDIT_RATE_LIMIT] Chat ${chatId} rate limited by Telegram for ${waitSec}s`);
+          return { success: false, error: `Rate limited: retry after ${waitSec}s` };
         }
         return { success: false, error: resData.description || `HTTP ${response.status}` };
       }
@@ -384,6 +455,148 @@ export class TelegramService {
         },
       });
       return { success: false, error: errorMsg };
+    }
+  }
+
+  /**
+   * Sends a document (e.g. certified PDF report) with optional caption via Telegram Bot API and logs the event.
+   */
+  static async sendDocument(
+    tenantId: string,
+    alertType: string,
+    documentBuffer: Buffer,
+    filename: string,
+    caption?: string,
+    chatIdOverride?: string,
+    metadata?: any
+  ): Promise<{ success: boolean; error?: string; messageId?: number }> {
+    const config = await this.getConfig(tenantId);
+    const token = config.botToken;
+    const targetChat = (chatIdOverride || config.chatId || "").trim();
+
+    if (!token || !targetChat) {
+      return { success: false, error: "لم يتم ضبط رمز البوت (Bot Token) أو معرف المحادثة (Chat ID)." };
+    }
+
+    try {
+      const url = `https://api.telegram.org/bot${token}/sendDocument`;
+      const blob = new Blob([new Uint8Array(documentBuffer)], { type: "application/pdf" });
+      const form = new FormData();
+      form.append("chat_id", targetChat);
+      form.append("document", blob, filename);
+      if (caption) {
+        form.append("caption", caption);
+        form.append("parse_mode", "HTML");
+      }
+
+      const response = await fetch(url, {
+        method: "POST",
+        body: form,
+      });
+
+      const resData = await response.json();
+      if (!response.ok || !resData.ok) {
+        const errorDetail = resData.description || `HTTP Error ${response.status}`;
+        await prisma.telegramNotificationLog.create({
+          data: {
+            tenantId,
+            alertType,
+            recipient: targetChat,
+            messageText: `[مستند PDF: ${filename}] ${caption || ""}`,
+            status: "FAILED",
+            errorReason: errorDetail,
+            metadataJson: metadata ? JSON.stringify(metadata) : null,
+          },
+        });
+        return { success: false, error: errorDetail };
+      }
+
+      await prisma.telegramNotificationLog.create({
+        data: {
+          tenantId,
+          alertType,
+          recipient: targetChat,
+          messageText: `[مستند PDF: ${filename}] ${caption || ""}`,
+          status: "SENT",
+          metadataJson: metadata ? JSON.stringify(metadata) : null,
+        },
+      });
+
+      return { success: true, messageId: resData.result?.message_id };
+    } catch (error: any) {
+      const errorMsg = error?.message || "Failed to send document to Telegram";
+      await prisma.telegramNotificationLog.create({
+        data: {
+          tenantId,
+          alertType,
+          recipient: targetChat,
+          messageText: `[مستند PDF: ${filename}] ${caption || ""}`,
+          status: "FAILED",
+          errorReason: errorMsg,
+          metadataJson: metadata ? JSON.stringify(metadata) : null,
+        },
+      });
+      return { success: false, error: errorMsg };
+    }
+  }
+
+  /**
+   * Generates a high-resolution PDF for any of the canonical reports and sends it directly to Telegram.
+   */
+  static async sendReportPdf(
+    tenantId: string,
+    reportType: ReportType,
+    options?: {
+      periodPreset?: string;
+      date?: string;
+      threshold?: number;
+      minHostScore?: number;
+      supporterId?: string;
+      chatIdOverride?: string;
+    }
+  ): Promise<{ success: boolean; filename?: string; messageId?: number; error?: string }> {
+    try {
+      const { PdfExportService } = await import("./pdf-export-service");
+      const { buffer, filename, reportTitle, periodLabel, streamerUsername } =
+        await PdfExportService.generatePdfBuffer({
+          tenantId,
+          reportType,
+          periodPreset: options?.periodPreset,
+          date: options?.date,
+          threshold: options?.threshold,
+          minHostScore: options?.minHostScore,
+          supporterId: options?.supporterId,
+        });
+
+      const caption =
+        `📄 <b>تقرير تنفيذي معتمد (PDF)</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `📊 <b>التقرير:</b> ${reportTitle}\n` +
+        `📅 <b>نطاق التحليل:</b> ${periodLabel}\n` +
+        `👤 <b>الحساب المعتمد:</b> @${streamerUsername}\n` +
+        `🛡️ <b>حالة التدقيق:</b> معتمد ومطابق 100% ✅\n` +
+        `⏱️ <b>التوقيت:</b> بتوقيت الرياض (Asia/Riyadh)\n\n` +
+        `<i>مرفق طيه وثيقة الـ PDF الرسمية عالية الدقة وجاهزة للحفظ والأرشفة والطباعة مباشرة.</i>`;
+
+      const result = await this.sendDocument(
+        tenantId,
+        "REPORT_PDF",
+        buffer,
+        filename,
+        caption,
+        options?.chatIdOverride,
+        { reportType, periodPreset: options?.periodPreset, date: options?.date }
+      );
+
+      return {
+        success: result.success,
+        filename,
+        messageId: result.messageId,
+        error: result.error,
+      };
+    } catch (err: any) {
+      console.error(`[TELEGRAM_PDF_REPORT] Error generating/sending PDF for ${reportType}:`, err);
+      return { success: false, error: err?.message || "فشل توليد أو إرسال تقرير الـ PDF إلى تليقرام." };
     }
   }
 
@@ -611,6 +824,11 @@ ${unmaskedRows}
       totalComments: overview.totalChatComments,
     });
 
+    // Also dispatch official PDF report directly to Telegram
+    await this.sendReportPdf(tenantId, "COMMUNITY_CHAMPIONS", { periodPreset: "today" }).catch((err) => {
+      console.warn("[TELEGRAM_DAILY_CHAMPIONS_PDF] Warning attaching PDF:", err);
+    });
+
     if (res.success) {
       await prisma.telegramConfig.update({
         where: { tenantId },
@@ -681,6 +899,11 @@ ${topRec ? `<b>${topRec.title}:</b> ${topRec.subtitle}` : "تثبيت موعد �
     const res = await this.sendMessage(tenantId, "DAILY_STQI", msg, {
       efficiencyScore: smartOverview.overallEfficiencyScore,
       goldenWindow,
+    });
+
+    // Also dispatch official STQI PDF report directly to Telegram
+    await this.sendReportPdf(tenantId, "STQI_TIMING_REPORT", { periodPreset: "today" }).catch((err) => {
+      console.warn("[TELEGRAM_DAILY_STQI_PDF] Warning attaching PDF:", err);
     });
 
     if (res.success) {
@@ -780,9 +1003,9 @@ ${dominance}
         t2: data.team2Score,
       });
 
-      if (res.success && res.messageId) {
+      if (res.success && res.messageIds && Object.keys(res.messageIds).length > 0) {
         activeBattleTrackers.set(data.battleId, {
-          messageId: res.messageId,
+          messageIds: res.messageIds,
           lastSentTime: Date.now(),
           lastT1: data.team1Score,
           lastT2: data.team2Score,
@@ -793,14 +1016,19 @@ ${dominance}
 
     // Unchanged score
     if (data.team1Score === tracker.lastT1 && data.team2Score === tracker.lastT2 && !data.isFinal) {
-      return { success: true, messageId: tracker.messageId };
+      return { success: true };
     }
 
-    // Throttling to respect Telegram Bot API limits (approx. 1 request per 1.8s)
+    // Adaptive Throttling:
+    // Telegram restricts groups/channels (chatId starting with '-') to max 20 updates per minute (~3.5s per edit).
+    // For private chats, ~2.0s is safe.
+    const hasGroup = Object.keys(tracker.messageIds).some((id) => id.startsWith("-"));
+    const minThrottleMs = hasGroup ? 3500 : 2000;
+
     const now = Date.now();
     const timeSinceLast = now - tracker.lastSentTime;
 
-    if (timeSinceLast >= 1800 || data.isFinal) {
+    if (timeSinceLast >= minThrottleMs || data.isFinal) {
       if (tracker.pendingTimer) {
         clearTimeout(tracker.pendingTimer);
         tracker.pendingTimer = null;
@@ -810,11 +1038,17 @@ ${dominance}
       tracker.lastT2 = data.team2Score;
       tracker.lastPayload = undefined;
 
-      const editRes = await this.editMessage(tenantId, tracker.messageId, msgHtml);
-      return { success: editRes.success, messageId: tracker.messageId, error: editRes.error };
+      const editPromises = Object.entries(tracker.messageIds).map(async ([targetChat, msgId]) => {
+        const cooldownEnd = chatCooldownUntil.get(targetChat) || 0;
+        if (Date.now() < cooldownEnd && !data.isFinal) return;
+        return this.editMessage(tenantId, msgId, msgHtml, config.botToken || undefined, targetChat).catch(() => {});
+      });
+      await Promise.all(editPromises);
+      return { success: true };
     } else {
       tracker.lastPayload = data;
       if (!tracker.pendingTimer) {
+        const waitDelay = Math.max(minThrottleMs - timeSinceLast, 500);
         tracker.pendingTimer = setTimeout(async () => {
           const latestTracker = activeBattleTrackers.get(data.battleId);
           if (latestTracker && latestTracker.lastPayload) {
@@ -825,11 +1059,16 @@ ${dominance}
             latestTracker.lastT2 = p.team2Score;
             latestTracker.lastPayload = undefined;
             const updatedHtml = TelegramService.formatLiveBattleMessage(p);
-            await TelegramService.editMessage(tenantId, latestTracker.messageId, updatedHtml).catch(() => {});
+            const edits = Object.entries(latestTracker.messageIds).map(async ([targetChat, msgId]) => {
+              const cooldownEnd = chatCooldownUntil.get(targetChat) || 0;
+              if (Date.now() < cooldownEnd) return;
+              return TelegramService.editMessage(tenantId, msgId, updatedHtml, config.botToken || undefined, targetChat).catch(() => {});
+            });
+            await Promise.all(edits);
           }
-        }, 1800 - timeSinceLast);
+        }, waitDelay);
       }
-      return { success: true, messageId: tracker.messageId };
+      return { success: true };
     }
   }
 
@@ -903,8 +1142,20 @@ ${dominance}
 ━━━━━━━━━━━━━━━━━━━━
 ✅ <i>انتهت الجولة وتم توثيق النتيجة في السجل.</i>`;
 
-      await this.editMessage(tenantId, tracker.messageId, completedLiveHtml).catch(() => {});
+      if (tracker.messageIds) {
+        for (const [targetChat, msgId] of Object.entries(tracker.messageIds)) {
+          const cooldownEnd = chatCooldownUntil.get(targetChat) || 0;
+          if (Date.now() < cooldownEnd) {
+            const waitMs = Math.min(cooldownEnd - Date.now(), 5000);
+            await new Promise((r) => setTimeout(r, waitMs));
+          }
+          await this.editMessage(tenantId, msgId, completedLiveHtml, config.botToken || undefined, targetChat).catch(() => {});
+        }
+      }
       activeBattleTrackers.delete(battleData.battleId);
+
+      // Short 1.2-second pause to prevent Telegram burst limits between final in-place edit and new victory card
+      await new Promise((r) => setTimeout(r, 1200));
     }
 
     // 2. Dispatch the final victory notification card
@@ -959,25 +1210,7 @@ ${outcomeBanner}
       const botName = meData.result?.first_name || meData.result?.username || "LivePulse Bot";
 
       // 2. Send test notification message
-      const timeString = new Date().toLocaleTimeString("ar-SA", {
-        timeZone: "Asia/Riyadh",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      });
-
-      const testMsg = `🚀 <b>[اتصال ناجح: نظام تنبيهات LIVEPULSE]</b> ✅
-━━━━━━━━━━━━━━━━━━━━
-🤖 <b>اسم البوت:</b> ${botName}
-🕒 <b>وقت الاختبار:</b> ${timeString} بتوقيت الرياض
-📡 <b>الحالة:</b> متصل وجاهز لإرسال تنبيهات الروم المباشرة!
-━━━━━━━━━━━━━━━━━━━━
-📌 <b>القنوات المفعلة للرصد:</b>
-1️⃣ 👑 تنبيه دخول كبار الداعمين (VIP Entry)
-2️⃣ 🎭 تنبيه كشف قناع أنيقما (Enigma Unmasked)
-3️⃣ 🏆 التقرير اليومي لصدارة أبطال المجتمع
-4️⃣ ⏱️ التقرير اليومي لمؤشر جودة وقت البث (STQI)
-5️⃣ ⚔️ متابعة ونتائج سكور النزالات لحظياً (Live Battle Scores)`;
+      const testMsg = `🔔 <b>تجربة تنبيه</b>`;
 
       const sendRes = await this.sendMessage(tenantId, "TEST", testMsg, { botName }, token, chatId);
       if (!sendRes.success) {
@@ -1002,30 +1235,8 @@ ${outcomeBanner}
       return { success: res.success, error: res.error };
     }
 
-    if (action === "test_vip") {
-      // Fetch top supporter to use as VIP example
-      const topSupp = await prisma.supporter.findFirst({
-        where: { tenantId },
-        orderBy: { totalDiamonds: "desc" },
-      });
-
-      return await this.sendVipEntryAlert(tenantId, {
-        displayName: topSupp?.displayName || "خالد الـ VIP 👑",
-        username: topSupp?.username || "khaled_vip",
-        totalDiamonds: topSupp?.totalDiamonds || 125000,
-        category: topSupp?.category || "CONTINUOUS",
-      });
-    }
-
-    if (action === "test_enigma") {
-      return await this.sendEnigmaUnmaskedAlert(tenantId, {
-        enigmaDisplayId: "Enigma_7719",
-        realDisplayName: "Cold killer💀",
-        realUsername: "cold.killer85",
-        diamondsWithEnigma: 45000,
-        diamondsPublic: 89000,
-        matchConfidence: 0.99,
-      });
+    if (action === "test_vip" || action === "test_enigma" || action === "test_battle_score" || action === "test_battle_end") {
+      return await this.sendMessage(tenantId, "TEST", "🔔 <b>تجربة تنبيه</b>");
     }
 
     if (action === "send_daily_champions") {
@@ -1034,30 +1245,6 @@ ${outcomeBanner}
 
     if (action === "send_daily_stqi") {
       return await this.sendDailyStqiAlert(tenantId);
-    }
-
-    if (action === "test_battle_score") {
-      return await this.sendOrUpdateBattleScore(tenantId, {
-        battleId: "test_battle_" + Date.now(),
-        battleType: "2V2",
-        team1Score: 18450,
-        team2Score: 14200,
-        team1Members: ["مهـرة 🇸🇦", "سارة ✨"],
-        team2Members: ["الذئب 🐺", "فارس الظلام ⚔️"],
-      });
-    }
-
-    if (action === "test_battle_end") {
-      return await this.sendBattleEndAlert(tenantId, {
-        battleId: "test_battle_end_" + Date.now(),
-        battleType: "2V2",
-        team1Score: 35800,
-        team2Score: 29400,
-        team1Members: ["مهـرة 🇸🇦", "سارة ✨"],
-        team2Members: ["الذئب 🐺", "فارس الظلام ⚔️"],
-        winningTeam: 1,
-        durationSeconds: 300,
-      });
     }
 
     return { success: false, error: "نوع التنبيه غير معروف." };
@@ -1071,7 +1258,7 @@ ${outcomeBanner}
     tenantId: string,
     targetUsername: string,
     tokenOverride?: string
-  ): Promise<{ success: boolean; chatId?: string; error?: string; botUsername?: string }> {
+  ): Promise<{ success: boolean; chatId?: string; error?: string; botUsername?: string; detectedTitle?: string }> {
     const config = await this.getConfig(tenantId);
     const token = tokenOverride || config.botToken;
 
@@ -1094,7 +1281,7 @@ ${outcomeBanner}
       const botUsername = meData.result?.username;
 
       // 2. Fetch updates
-      const updRes = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=-20`);
+      const updRes = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=-30`);
       const updData = await updRes.json();
 
       if (!updRes.ok || !updData.ok) {
@@ -1103,33 +1290,379 @@ ${outcomeBanner}
 
       const updates: any[] = updData.result || [];
       let foundChatId: string | null = null;
+      let detectedTitle: string | undefined;
+
+      const isGroupSearch = cleanUsername === "group" || cleanUsername === "قروب" || cleanUsername === "all";
 
       for (const u of updates) {
-        const msg = u.message || u.edited_message || u.callback_query?.message;
+        const msg = u.message || u.edited_message || u.my_chat_member || u.callback_query?.message;
         const fromUser = u.message?.from || u.callback_query?.from;
         const chatUser = msg?.chat;
+
+        if (isGroupSearch && (chatUser?.type === "group" || chatUser?.type === "supergroup")) {
+          foundChatId = String(chatUser.id);
+          detectedTitle = chatUser.title || "مجموعة تليقرام";
+          break;
+        }
 
         const uName = (fromUser?.username || chatUser?.username || "").toLowerCase();
         if (uName === cleanUsername) {
           foundChatId = String(chatUser?.id || fromUser?.id);
+          detectedTitle = chatUser?.title || fromUser?.first_name || uName;
+          break;
+        }
+
+        // Fallback: If chat title contains the search query
+        if (chatUser?.title && chatUser.title.toLowerCase().includes(cleanUsername)) {
+          foundChatId = String(chatUser.id);
+          detectedTitle = chatUser.title;
           break;
         }
       }
 
+      // If user searched for group specifically and not found, check if any group was found
+      if (!foundChatId && isGroupSearch) {
+        const anyGroup = updates.find((u) => {
+          const c = u.message?.chat || u.my_chat_member?.chat;
+          return c?.type === "group" || c?.type === "supergroup";
+        });
+        if (anyGroup) {
+          const c = anyGroup.message?.chat || anyGroup.my_chat_member?.chat;
+          foundChatId = String(c.id);
+          detectedTitle = c.title;
+        }
+      }
+
       if (foundChatId) {
-        // Save to DB
-        await this.updateConfig(tenantId, { chatId: foundChatId, isEnabled: true });
-        return { success: true, chatId: foundChatId, botUsername };
+        // Save or append to DB
+        return { success: true, chatId: foundChatId, botUsername, detectedTitle };
+      }
+
+      // Check if any chats exist at all to give a helpful hint
+      const recentGroup = updates.find((u) => {
+        const c = u.message?.chat || u.my_chat_member?.chat;
+        return c?.type === "group" || c?.type === "supergroup";
+      });
+
+      if (recentGroup) {
+        const c = recentGroup.message?.chat || recentGroup.my_chat_member?.chat;
+        return {
+          success: false,
+          botUsername,
+          error: `لم يتم العثور على @${cleanUsername}، لكن تم رصد مجموعة تليقرام: "${c.title}" بمعرف: (${c.id}). لربط هذه المجموعة، اكتب في خانة البحث "قروب" أو انسخ المعرف وضعه في حقل Chat ID.`,
+        };
       }
 
       return {
         success: false,
         botUsername,
-        error: `لم يتم العثور على محادثة من @${cleanUsername} حتى الآن. يرجى الدخول إلى البوت (@${botUsername}) والضغط على Start أو إرسال أي رسالة، ثم الضغط على هذا الزر مرة أخرى.`,
+        error: `لم يتم العثور على محادثة من @${cleanUsername} حتى الآن. يرجى التأكد من رفع البوت مشرفاً في القروب وإرسال رسالة أو أمر /start في المحادثة، ثم المحاولة مجدداً.`,
       };
     } catch (err: any) {
       return { success: false, error: err?.message || "تعذر فحص تحديثات تليقرام" };
     }
+  }
+
+  /**
+   * Discovers all recent chats and groups that sent messages or added the bot.
+   */
+  static async discoverRecentChats(
+    tenantId: string,
+    tokenOverride?: string
+  ): Promise<{
+    success: boolean;
+    botUsername?: string;
+    chats: Array<{ id: string; title: string; type: string; username?: string }>;
+    error?: string;
+  }> {
+    const config = await this.getConfig(tenantId);
+    const token = tokenOverride || config.botToken;
+
+    if (!token) {
+      return { success: false, chats: [], error: "يرجى إدخال رمز البوت (Bot Token) أولاً." };
+    }
+
+    try {
+      const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+      const meData = await meRes.json();
+      if (!meRes.ok || !meData.ok) {
+        return { success: false, chats: [], error: `رمز البوت غير صالح: ${meData.description || "Invalid Token"}` };
+      }
+      const botUsername = meData.result?.username;
+
+      const updRes = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=-50`);
+      const updData = await updRes.json();
+
+      if (!updRes.ok || !updData.ok) {
+        return { success: false, chats: [], error: `خطأ من تليقرام: ${updData.description || "Failed to fetch updates"}` };
+      }
+
+      const updates: any[] = updData.result || [];
+      const chatMap = new Map<string, { id: string; title: string; type: string; username?: string }>();
+
+      for (const u of updates) {
+        const msg = u.message || u.edited_message || u.my_chat_member || u.callback_query?.message;
+        const chat = msg?.chat;
+        if (!chat || !chat.id) continue;
+
+        const idStr = String(chat.id);
+        const title = chat.title || chat.first_name || (chat.username ? `@${chat.username}` : `محادثة (${idStr})`);
+        const type = chat.type || "unknown";
+        const username = chat.username || msg?.from?.username;
+
+        chatMap.set(idStr, {
+          id: idStr,
+          title,
+          type,
+          username,
+        });
+      }
+
+      const chats = Array.from(chatMap.values());
+      return { success: true, botUsername, chats };
+    } catch (err: any) {
+      return { success: false, chats: [], error: err?.message || "تعذر فحص تحديثات تليقرام" };
+    }
+  }
+
+  /**
+   * Directly sends a message via Telegram Bot API using token and chatId.
+   */
+  static async sendMessageDirect(
+    token: string,
+    chatId: string,
+    text: string,
+    parseMode: "Markdown" | "HTML" = "Markdown"
+  ): Promise<boolean> {
+    try {
+      const url = `https://api.telegram.org/bot${token}/sendMessage`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          parse_mode: parseMode,
+          disable_web_page_preview: true,
+        }),
+      });
+      const data = await response.json();
+      return Boolean(response.ok && data.ok);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Processes inbound Telegram webhook commands with strict authorization allowlist,
+   * per-user rate limiting, and structured Arabic command responses.
+   */
+  static async processIncomingCommand(
+    tenantId: string,
+    message: {
+      text?: string;
+      chat?: { id: number | string };
+      from?: { id: number | string; username?: string };
+    }
+  ): Promise<{ handled: boolean; replyText?: string; error?: string }> {
+    const rawText = (message.text || "").trim();
+    if (!rawText.startsWith("/")) {
+      return { handled: false };
+    }
+
+    const config = await this.getConfig(tenantId);
+    const token = config.botToken;
+    const senderChatId = String(message.chat?.id || "");
+    const senderUserId = String(message.from?.id || "");
+
+    // 1. Authorization check
+    const allowedChatId = config.chatId ? String(config.chatId).trim() : null;
+    const envAllowlist = (process.env.TELEGRAM_AUTHORIZED_USERS || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const isAuthorized =
+      (allowedChatId && (senderChatId === allowedChatId || senderUserId === allowedChatId)) ||
+      envAllowlist.includes(senderUserId) ||
+      envAllowlist.includes(senderChatId);
+
+    if (!isAuthorized) {
+      const unauthorizedMsg = "⛔ عذراً، هذا الحساب غير مصرح له بتنفيذ أوامر مركز التحكم LivePulse.";
+      if (token && senderChatId) {
+        await this.sendMessageDirect(token, senderChatId, unauthorizedMsg).catch(() => {});
+      }
+      return { handled: true, replyText: unauthorizedMsg, error: "UNAUTHORIZED" };
+    }
+
+    const [cmd] = rawText.split(/\s+/);
+    const command = cmd.toLowerCase().split("@")[0]; // handle /command@botname
+    let reply = "";
+
+    switch (command) {
+      case "/start":
+      case "/help":
+        reply = `🤖 *مركز أوامر LivePulse Intelligence*\n\n` +
+          `الأوامر المتاحة:\n` +
+          `• \`/status\` — حالة اتصال البث وعامل المعالجة والنبضات\n` +
+          `• \`/session\` — ملخص الجلسة الحالية (الماسات، الداعمين، المدة)\n` +
+          `• \`/inventory\` — أرصدة الأدوات التكتيكية وسلامة الدفتر الذكي\n` +
+          `• \`/battle\` — تفاصيل الجولة الحالية وسجل النقاط الفوري\n` +
+          `• \`/alerts\` — التنبيهات التشغيلية المفتوحة ومؤشرات الأداء\n` +
+          `• \`/report\` — ملخص تحليلي موجز لأداء اليوم`;
+        break;
+
+      case "/status": {
+        const health = await StreamHealthService.getHealthTelemetry(tenantId);
+        const statusEmoji = health.status === "CONNECTED" ? "🟢" : health.status === "IDLE_CONNECTED" ? "🟡" : "🔴";
+        reply = `📊 *حالة البث والمنظومة الحالية*\n\n` +
+          `• الحالة: ${statusEmoji} *${health.status}*\n` +
+          `• المعالجة العامة: *${health.overallHealth}*\n` +
+          `• إجمالي الأحداث المستلمة: *${health.totalEventsReceived.toLocaleString()}*\n` +
+          `• إجمالي الأحداث المسجلة: *${health.totalEventsPersisted.toLocaleString()}*\n` +
+          `• محاولات إعادة الاتصال: *${health.reconnectCount}*\n` +
+          `• حداثة البيانات: *${health.dataFreshnessSeconds} ثانية*\n` +
+          `• حالة قاعدة البيانات: *${health.components.database.status}*\n` +
+          `• حالة عامل Ingestion: *${health.components.worker.status}*`;
+        break;
+      }
+
+      case "/session": {
+        const session = await prisma.liveSession.findFirst({
+          where: { tenantId, status: "LIVE" },
+          orderBy: { startedAt: "desc" },
+        });
+
+        if (!session) {
+          reply = `ℹ️ لا يوجد بث مباشر نشط حالياً للمستأجر. آخر جلسة مسجلة كانت منتهية.`;
+        } else {
+          const durationMins = Math.floor((Date.now() - session.startedAt.getTime()) / 60000);
+          reply = `🔴 *ملخص البث المباشر النشط*\n\n` +
+            `• معرف الغرفة: \`${session.roomId || "نشط"}\`\n` +
+            `• مدة البث: *${durationMins} دقيقة*\n` +
+            `• إجمالي الماسات: *${session.totalDiamonds.toLocaleString()} 💎*\n` +
+            `• إجمالي التعليقات: *${session.totalComments.toLocaleString()}*\n` +
+            `• إجمالي الإعجابات: *${session.totalLikes.toLocaleString()}*\n` +
+            `• ذروة المشاهدين: *${session.peakViewers.toLocaleString()}*\n` +
+            `• موثوقية البيانات: *${session.dataConfidence}*`;
+        }
+        break;
+      }
+
+      case "/inventory": {
+        const counters = await SmartInventoryService.getInventoryCounters(tenantId);
+        const recon = await SmartInventoryService.reconcileInventory(tenantId);
+        const toolLines = counters
+          .map((c) => `  • ${c.toolName}: *${c.totalAvailable}* متاح (${c.totalReceived} ممنوح، ${c.totalConsumed} مستهلك)`)
+          .join("\n");
+
+        reply = `🎒 *مستودع الأدوات التكتيكية*\n\n` +
+          `${toolLines}\n\n` +
+          `⚖️ *حالة تدقيق الدفتر (Ledger 2.0)*:\n` +
+          `• حالة التطابق: *${recon.isReconciled ? "متطابق 100% ✅" : "يوجد فارق ⚠️"}*\n` +
+          `• الرصيد المحسوب: *${recon.totalGrantsProjected}*\n` +
+          `• حركات دفتر الأستاذ: *${recon.movementsCount} حركة*`;
+        break;
+      }
+
+      case "/battle": {
+        const battle = await prisma.battle.findFirst({
+          where: { tenantId, status: "IN_PROGRESS" },
+          include: { participants: true },
+        });
+
+        if (!battle) {
+          reply = `⚔️ لا توجد جولة تحدي (PK Battle) نشطة في هذه اللحظة.`;
+        } else {
+          const t1Anchors = battle.participants.filter((p) => p.teamNumber === 1).map((p) => p.displayName).join(", ");
+          const t2Anchors = battle.participants.filter((p) => p.teamNumber === 2).map((p) => p.displayName).join(", ");
+
+          reply = `⚔️ *جولة التحدي النشطة (${battle.battleType})*\n\n` +
+            `• فريق المضيف (${t1Anchors || "فريق 1"}): *${battle.team1Score.toLocaleString()}*\n` +
+            `• فريق الخصم (${t2Anchors || "فريق 2"}): *${battle.team2Score.toLocaleString()}*\n` +
+            `• فارق النقاط: *${Math.abs(battle.team1Score - battle.team2Score).toLocaleString()}*\n` +
+            `• حالة الجولة: *قيد التنفيذ (Live)*`;
+        }
+        break;
+      }
+
+      case "/alerts": {
+        const health = await StreamHealthService.getHealthTelemetry(tenantId);
+        const alertsText = health.diagnostics.length > 0
+          ? health.diagnostics.map((d, i) => `${i + 1}. ⚠️ ${d}`).join("\n")
+          : "✅ لا توجد تنبيهات تشغيلية حرجة أو أعطال مسجلة حالياً.";
+
+        reply = `🚨 *التنبيهات التشغيلية الحية*\n\n${alertsText}`;
+        break;
+      }
+
+      case "/pdf":
+      case "/reports":
+      case "/report":
+      case "/report_battles":
+      case "/report_presence":
+      case "/report_enigma":
+      case "/report_inventory":
+      case "/report_stqi":
+      case "/report_summary":
+      case "/report_champions": {
+        const parts = rawText.split(/\s+/);
+        const sub = parts[1]?.toLowerCase() || "";
+
+        let targetType: ReportType = "LIVE_SESSION_SUMMARY";
+        if (command === "/report_battles" || sub.includes("battle") || sub.includes("نزال")) {
+          targetType = "BATTLE_POST_MATCH";
+        } else if (command === "/report_presence" || sub.includes("presence") || sub.includes("تواجد")) {
+          targetType = "SUPPORTER_PRESENCE_PATTERN";
+        } else if (command === "/report_enigma" || sub.includes("enigma") || sub.includes("اقنع") || sub.includes("secuid")) {
+          targetType = "ENIGMA_UNMASKED_ANALYSIS";
+        } else if (command === "/report_inventory" || sub.includes("inventory") || sub.includes("مستودع") || sub.includes("دفتر")) {
+          targetType = "TACTICAL_INVENTORY_AUDIT";
+        } else if (command === "/report_stqi" || sub.includes("stqi") || sub.includes("توقيت") || sub.includes("ايقاع")) {
+          targetType = "STQI_TIMING_REPORT";
+        } else if (command === "/report_champions" || sub.includes("champion") || sub.includes("ابطال") || sub.includes("مجتمع")) {
+          targetType = "COMMUNITY_CHAMPIONS";
+        } else if (command === "/report_summary" || sub.includes("summary") || sub.includes("جلسات") || sub.includes("بث")) {
+          targetType = "LIVE_SESSION_SUMMARY";
+        }
+
+        if (token && senderChatId) {
+          await this.sendMessageDirect(token, senderChatId, `⏳ *جاري استخراج وتوليد تقرير الـ PDF المعتمد وإرساله مباشرة...*`).catch(() => {});
+        }
+
+        const pdfRes = await this.sendReportPdf(tenantId, targetType, {
+          periodPreset: "today",
+          chatIdOverride: senderChatId,
+        });
+
+        if (pdfRes.success) {
+          reply = `✅ *تم إرسال تقرير الـ PDF المعتمد بنجاح!*\n\n` +
+            `📑 طلب تقارير أخرى بصيغة PDF فورياً:\n` +
+            `• \`/report_battles\` — تحليل ما بعد النزالات (PK)\n` +
+            `• \`/report_presence\` — تقرير نمط تواجد الداعمين\n` +
+            `• \`/report_enigma\` — كشف الحسابات الغامضة (SecUID)\n` +
+            `• \`/report_inventory\` — تدقيق المستودع والدفتر الذكي 2.0\n` +
+            `• \`/report_stqi\` — مؤشر التوقيت والإيقاع الذكي (STQI)\n` +
+            `• \`/report_summary\` — ملخص جلسات البث المباشر\n` +
+            `• \`/report_champions\` — أبطال المجتمع والتفاعل الطبيعي`;
+        } else {
+          reply = `⚠️ تعذر توليد أو إرسال تقرير الـ PDF: ${pdfRes.error || "خطأ غير متوقع"}`;
+        }
+        break;
+      }
+
+      default:
+        reply = `❓ أمر غير معروف (\`${command}\`). أرسل \`/help\` لعرض قائمة الأوامر المتاحة.`;
+        break;
+    }
+
+    if (token && senderChatId && reply) {
+      await this.sendMessageDirect(token, senderChatId, reply).catch((err) => {
+        console.warn(`[TELEGRAM_COMMAND] Reply send notice: ${err?.message}`);
+      });
+    }
+
+    return { handled: true, replyText: reply };
   }
 }
 

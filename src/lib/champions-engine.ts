@@ -81,7 +81,81 @@ export interface ChampionsOverview {
   recommendations: ChampionRecommendation[];
 }
 
+export interface PeriodOption {
+  id: string;
+  type: "WEEKLY" | "MONTHLY";
+  label: string;
+  sublabel: string;
+  startDate: string;
+  endDate: string;
+  isCurrent?: boolean;
+}
+
 export class ChampionsEngine {
+  /**
+   * Generates preset calendar weekly and monthly periods with Arabic formatted dates.
+   */
+  static getPresetPeriods(refDate = new Date()): {
+    weekly: PeriodOption[];
+    monthly: PeriodOption[];
+  } {
+    const weekly: PeriodOption[] = [];
+    const monthly: PeriodOption[] = [];
+
+    // Helper to format dates with Latin digits in Arabic locale
+    const formatArabic = (d: Date, opts: Intl.DateTimeFormatOptions) =>
+      d.toLocaleDateString("ar-EG-u-nu-latn", opts);
+
+    // 1. Generate 6 Weekly Periods (Ending at refDate / end of weeks)
+    for (let i = 0; i < 6; i++) {
+      const end = new Date(refDate.getTime() - i * 7 * 24 * 60 * 60 * 1000);
+      end.setHours(23, 59, 59, 999);
+      const start = new Date(end.getTime() - 6 * 24 * 60 * 60 * 1000);
+      start.setHours(0, 0, 0, 0);
+
+      const startDayStr = formatArabic(start, { day: "numeric", month: "long" });
+      const endDayStr = formatArabic(end, { day: "numeric", month: "long", year: "numeric" });
+      const isCurrent = i === 0;
+
+      const sublabel = `${startDayStr} — ${endDayStr}`;
+      const label = isCurrent ? `الأسبوع الحالي (${sublabel})` : `أسبوع: ${sublabel}`;
+
+      weekly.push({
+        id: `week_${i}`,
+        type: "WEEKLY",
+        label,
+        sublabel,
+        startDate: start.toISOString(),
+        endDate: end.toISOString(),
+        isCurrent,
+      });
+    }
+
+    // 2. Generate 6 Monthly Periods
+    for (let m = 0; m < 6; m++) {
+      const d = new Date(refDate.getFullYear(), refDate.getMonth() - m, 1);
+      const start = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+      const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+      const monthYear = formatArabic(start, { month: "long", year: "numeric" });
+      const isCurrent = m === 0;
+
+      const sublabel = monthYear;
+      const label = isCurrent ? `الشهر الحالي (${monthYear})` : `شهر ${monthYear}`;
+
+      monthly.push({
+        id: `month_${m}`,
+        type: "MONTHLY",
+        label,
+        sublabel,
+        startDate: start.toISOString(),
+        endDate: end.toISOString(),
+        isCurrent,
+      });
+    }
+
+    return { weekly, monthly };
+  }
+
   /**
    * Computes community champions scores exclusively from audience engagement.
    * STRICT ENFORCEMENT: Financial gifts/diamonds are NOT included in the formula.
@@ -99,7 +173,8 @@ export class ChampionsEngine {
 
     const whereClause: any = { tenantId };
     if (startDate && endDate) {
-      whereClause.lastObservedAt = { gte: startDate, lte: endDate };
+      whereClause.lastObservedAt = { gte: startDate };
+      whereClause.firstObservedAt = { lte: endDate };
     }
 
     // 1. Fetch active community followers
@@ -196,9 +271,21 @@ export class ChampionsEngine {
   /**
    * Generates comprehensive community health intelligence and actionable recommendations.
    */
-  static async getChampionsOverview(tenantId: string): Promise<ChampionsOverview> {
+  static async getChampionsOverview(
+    params: string | { tenantId: string; startDate?: Date; endDate?: Date }
+  ): Promise<ChampionsOverview> {
+    const tenantId = typeof params === "string" ? params : params.tenantId;
+    const startDate = typeof params === "object" ? params.startDate : undefined;
+    const endDate = typeof params === "object" ? params.endDate : undefined;
+
+    const whereClause: any = { tenantId };
+    if (startDate && endDate) {
+      whereClause.lastObservedAt = { gte: startDate };
+      whereClause.firstObservedAt = { lte: endDate };
+    }
+
     const agg = await prisma.supporter.aggregate({
-      where: { tenantId },
+      where: whereClause,
       _sum: { totalLikes: true, totalComments: true },
       _count: { id: true },
     });
@@ -208,17 +295,19 @@ export class ChampionsEngine {
     const totalChatComments = agg._sum.totalComments || 0;
 
     const topCommenterRec = await prisma.supporter.findFirst({
-      where: { tenantId },
+      where: whereClause,
       orderBy: { totalComments: "desc" },
     });
 
     const topLikerRec = await prisma.supporter.findFirst({
-      where: { tenantId },
+      where: whereClause,
       orderBy: { totalLikes: "desc" },
     });
 
     const topChampionsList = await this.computePeriodChampions({
       tenantId,
+      startDate,
+      endDate,
       limit: 5,
     });
 

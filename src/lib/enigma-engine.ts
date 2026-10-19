@@ -1,6 +1,17 @@
 import { prisma } from "./prisma";
 
+export type EvidenceClassification =
+  | "IDENTIFIER_MATCH"       // Verified exact SecUID or UID correlation
+  | "METADATA_MATCH"         // Verified profile / display identifier correlation
+  | "BEHAVIORAL_SIMILARITY"  // Timing pattern or gift sequence correlation (never claims identity)
+  | "UNCONFIRMED_ASSOCIATION"// Inconclusive association
+  | "REJECTED_MATCH";        // Explicitly rejected by reviewer or conflict
+
 export interface EnigmaEvidence {
+  classification: EvidenceClassification;
+  classificationRationale: string;
+  isBehavioralOnly: boolean;
+  ruleVersion: string;
   realUsername: string;
   realDisplayName: string;
   enigmaUsername: string;
@@ -13,6 +24,12 @@ export interface EnigmaEvidence {
   enigmaEventsCount: number;
   topGifts: Array<{ name: string; count: number; diamonds: number; time: string }>;
   evidencePoints: string[];
+  reviewAudit?: {
+    reviewer: string;
+    reviewedAt: string;
+    action: "CONFIRMED" | "DISMISSED";
+    notes?: string;
+  };
 }
 
 export interface EnigmaCandidate {
@@ -21,6 +38,7 @@ export interface EnigmaCandidate {
   supporter1Id: string; // Enigma Supporter Record
   supporter2Id: string; // Real Supporter Record
   matchLevel: "STRONG_MATCH" | "PROBABLE_MATCH" | "INSUFFICIENT_EVIDENCE";
+  classification: EvidenceClassification;
   confidenceScore: number;
   evidence: EnigmaEvidence;
   status: "PENDING" | "CONFIRMED" | "DISMISSED";
@@ -174,8 +192,16 @@ export class EnigmaEngine {
       }
 
       const isDirectMatch = !!realUsername && realUsername !== enigma.displayId;
+      const classification: EvidenceClassification = isDirectMatch
+        ? "IDENTIFIER_MATCH"
+        : "UNCONFIRMED_ASSOCIATION";
       const matchLevel = isDirectMatch ? "STRONG_MATCH" : "PROBABLE_MATCH";
-      const confidenceScore = isDirectMatch ? 0.99 : 0.75;
+      const confidenceScore = isDirectMatch ? 1.0 : 0.4;
+      const isBehavioralOnly = false;
+      const ruleVersion = "v2.0-deterministic-secuid";
+      const classificationRationale = isDirectMatch
+        ? "تطابق معرّف تقني ثابت موثق (Persistent UID/SecUID Match) بدون افتراضات سلوكية."
+        : "حساب رُصد استخدامه لوضع القناع، لم يتم تأكيد تطابق معرّفه التقني مع أي حساب علني سابق.";
 
       const evidencePoints: string[] = [];
       if (isDirectMatch) {
@@ -202,6 +228,10 @@ export class EnigmaEngine {
       }
 
       const evidence: EnigmaEvidence = {
+        classification,
+        classificationRationale,
+        isBehavioralOnly,
+        ruleVersion,
         realUsername: realUsername || "حساب غامض حصري",
         realDisplayName: realDisplayName || enigma.nickname,
         enigmaUsername: enigma.displayId,
@@ -238,6 +268,63 @@ export class EnigmaEngine {
   }
 
   /**
+   * Reviews an Enigma candidate decision with full audit logging and reversible status.
+   */
+  static async reviewCandidate(params: {
+    reviewId: string;
+    reviewer: string;
+    action: "CONFIRMED" | "DISMISSED";
+    notes?: string;
+  }) {
+    const { reviewId, reviewer, action, notes } = params;
+
+    const review = await prisma.enigmaReview.findUnique({
+      where: { id: reviewId },
+    });
+
+    if (!review) throw new Error("Enigma review record not found");
+
+    const now = new Date();
+    const existingEvidence: EnigmaEvidence = JSON.parse(review.evidenceJson);
+    existingEvidence.reviewAudit = {
+      reviewer,
+      reviewedAt: now.toISOString(),
+      action,
+      notes,
+    };
+    if (action === "DISMISSED") {
+      existingEvidence.classification = "REJECTED_MATCH";
+    }
+
+    const updated = await prisma.enigmaReview.update({
+      where: { id: reviewId },
+      data: {
+        status: action,
+        reviewedAt: now,
+        reviewedBy: reviewer,
+        evidenceJson: JSON.stringify(existingEvidence),
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        tenantId: review.tenantId,
+        action: `ENIGMA_MATCH_${action}`,
+        entityType: "ENIGMA_REVIEW",
+        entityId: review.id,
+        detailsJson: JSON.stringify({
+          reviewer,
+          action,
+          notes,
+          timestamp: now.toISOString(),
+        }),
+      },
+    });
+
+    return updated;
+  }
+
+  /**
    * Fetches formatted Enigma review candidates.
    */
   static async getEnigmaReviews(tenantId: string, status?: string): Promise<EnigmaCandidate[]> {
@@ -257,6 +344,10 @@ export class EnigmaEngine {
         evidence = JSON.parse(r.evidenceJson);
       } catch {
         evidence = {
+          classification: r.matchLevel === "STRONG_MATCH" ? "IDENTIFIER_MATCH" : "UNCONFIRMED_ASSOCIATION",
+          classificationRationale: "بيانات تاريخية محملة",
+          isBehavioralOnly: false,
+          ruleVersion: "v1.0",
           realUsername: "غير معروف",
           realDisplayName: "مجهول",
           enigmaUsername: "Enigma",
@@ -277,6 +368,7 @@ export class EnigmaEngine {
         supporter1Id: r.supporter1Id,
         supporter2Id: r.supporter2Id,
         matchLevel: r.matchLevel as any,
+        classification: evidence.classification || (r.matchLevel === "STRONG_MATCH" ? "IDENTIFIER_MATCH" : "UNCONFIRMED_ASSOCIATION"),
         confidenceScore: r.confidenceScore,
         evidence,
         status: r.status as any,

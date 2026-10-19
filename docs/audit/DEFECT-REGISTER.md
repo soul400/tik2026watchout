@@ -1,0 +1,19 @@
+# LivePulse Intelligence — Prioritized Defect & Gap Register
+
+**Date:** October 16, 2026  
+**Project:** LivePulse Intelligence (`tik2026watchout`)
+
+---
+
+## Prioritized Defects & Gaps
+
+| ID | Module / File | Description & Reproducible Evidence | Severity | Proposed Fix |
+| :--- | :--- | :--- | :--- | :--- |
+| **DEF-01** | `src/lib/smart-inventory.ts` | **Absence of Unified Inventory Movement Ledger (2.0):** While `ToolConsumption` and `ExternalActivation` exist, there is no explicit ledger tracking all 6 lifecycle movement types (`ACQUISITION`, `USAGE`, `DEDUCTION`, `EXPIRATION`, `REVERSAL`, `CORRECTION`). No mathematical reconciliation service compares the ledger sum against current balances. | **P0 (Critical)** | Implement `ToolInventoryLedger` model and service in `smart-inventory.ts` with atomic ledger entries, balance projections, and a reconciliation engine. |
+| **DEF-02** | `src/lib/stream-health.ts` (Missing) | **Lack of Centralized Stream Health Telemetry:** Ingestion worker logs to console, but there is no centralized service recording connection state, event processing latency, last event timestamp, reconnection counts, or exposure via `/api/health`. | **P0 (Critical)** | Create `StreamHealthService` and `/api/health` with actionable states (`CONNECTED`, `IDLE_CONNECTED`, `RECONNECTING`, `DISCONNECTED`, `DEGRADED`). |
+| **DEF-03** | `src/lib/enigma-engine.ts` | **Monolithic Confidence Score without Categorized Evidence:** Enigma engine outputs a single `confidenceScore` percentage (e.g. 95%), which can overstate identity certainty. | **P1 (High)** | Refactor Enigma to use structured categories: `IDENTIFIER_MATCH`, `METADATA_MATCH`, `BEHAVIORAL_SIMILARITY`, `UNCONFIRMED_ASSOCIATION` with reversible audit decision records. |
+| **DEF-04** | `src/lib/telegram-service.ts` | **Absence of Inbound Command Center Webhook / Handler:** Telegram service only supports outbound alerts; does not process inbound authorized commands (`/status`, `/session`, `/inventory`, `/battle`, `/report`, `/alerts`) or enforce chat allowlists. | **P1 (High)** | Implement `TelegramCommandHandler` in `telegram-service.ts` and `/api/notifications/telegram/webhook` with strict user ID/chat ID allowlist and HMAC validation. |
+| **DEF-05** | `src/app/reports/` & `src/lib/reports-service.ts` (Missing) | **Fragmented Reporting & Missing Multi-Format Exports:** Reports page lacks centralized query aggregation and export generation for CSV (formula injection protected), XLSX, and PDF summaries. | **P1 (High)** | Create `ReportsService` providing unified analytical aggregations and CSV/JSON export handlers with full provenance metadata. |
+| **DEF-06** | `src/components/` & `src/app/page.tsx` | **Dashboard Decision Layers Not Formally Structured:** The main live monitoring dashboard contains excellent components but lacks clear visual grouping into the 4 Decision Layers (A: What is happening now, B: Attention needed, C: What to do next, D: Are we improving). | **P1 (High)** | Reorganize dashboard into 4 distinct semantic Decision Layers with accessible Arabic (RTL) indicators. |
+| **DEF-07** | `src/lib/copilot-service.ts` (Missing) | **LivePulse Copilot (P2 Assistant) Not Present:** Authorized operators cannot ask Arabic analytical questions grounded in domain data. | **P2 (Medium)** | Implement read-only server-grounded `CopilotService` with narrow tools for session summary, inventory status, battle history, and STQI recommendations. |
+| **DEF-08** | Multi-Live & Architecture | **Future Multi-Account Isolation Preparedness:** SQLite WAL is performant for single-tenant, but tenancy boundaries across background workers and API routes must be strictly enforced with explicit scope guards. | **P3 (Architecture)** | Formalize `DATABASE-SCALING-DECISION.md` documenting SQLite WAL operational envelope and PostgreSQL migration criteria. |

@@ -136,45 +136,9 @@ export class LiveEventPipeline {
         },
       });
 
-      // 4. Map Tactical Gifts to Smart Inventory Power-Ups
-      const giftNameLower = (data.gift?.name || data.giftName || "").toLowerCase();
-      let detectedToolKey: string | null = null;
-
-      if (giftNameLower.includes("glove") || giftNameLower.includes("قفاز")) {
-        detectedToolKey = "GLOVE";
-      } else if (giftNameLower.includes("fog") || giftNameLower.includes("ضباب")) {
-        detectedToolKey = "BOOST_FOG";
-      } else if (giftNameLower.includes("hammer") || giftNameLower.includes("مطرقة")) {
-        detectedToolKey = "HAMMER";
-      } else if (giftNameLower.includes("shield") || giftNameLower.includes("درع")) {
-        detectedToolKey = "SHIELD_DEFENSE";
-      } else if (giftNameLower.includes("time") || giftNameLower.includes("وقت")) {
-        detectedToolKey = "TIME_EXTENDER";
-      } else if (giftNameLower.includes("speed") || giftNameLower.includes("سرعة")) {
-        detectedToolKey = "SPEED_BOOSTER";
-      }
-
-      if (detectedToolKey) {
-        try {
-          const { SmartInventoryService } = await import("./smart-inventory");
-          const activeBattle = await prisma.battle.findFirst({
-            where: { tenantId: this.tenantId, status: "IN_PROGRESS" },
-            select: { id: true },
-          });
-
-          await SmartInventoryService.grantTool({
-            tenantId: this.tenantId,
-            supporterId: supporter.id,
-            toolKey: detectedToolKey,
-            quantity: repeatCount,
-            battleId: activeBattle?.id || undefined,
-            sourceEventId: dedupKey,
-            auditReference: `Gift: ${data.gift?.name || data.giftName} x${repeatCount}`,
-          });
-        } catch (toolErr) {
-          // Non-blocking
-        }
-      }
+      // 4. Tactical Tool Separation:
+      // Ordinary gifts (even containing terms like 'glove' or 'fog') are financial/score contributions
+      // and must NEVER grant tactical inventory tools. Tactical tools are only awarded via explicit battle card events.
 
       this.stats.processedCount++;
 
@@ -843,10 +807,67 @@ export class LiveEventPipeline {
 
       const { SmartInventoryService } = await import("./smart-inventory");
 
+      // Helper to extract numeric quantity across all known protobuf and JSON field variants
+      const extractItemQuantity = (obj: any): number => {
+        if (!obj || typeof obj !== "object") return 0;
+        const candidates = [
+          obj.awardCount,
+          obj.awardCardCount,
+          obj.cardAmount,
+          obj.cardCount,
+          obj.count,
+          obj.quantity,
+          obj.amount,
+          obj.cardNum,
+          obj.num,
+          obj.rewardCount,
+          obj.totalCount,
+          obj.score,
+          obj.card_count,
+          obj.card_amount,
+          obj.card_num,
+          obj.award_count,
+          obj.award_card_count,
+        ];
+        for (const c of candidates) {
+          const n = Number(c);
+          if (!isNaN(n) && n > 0) return n;
+        }
+        return 0;
+      };
+
+      // Helper to parse count from text (e.g. "x2", "بطاقتين", "قفازين", "3 بطاقات")
+      const extractCountFromText = (text: string): number => {
+        if (!text) return 0;
+        const s = text.toLowerCase();
+        if (
+          s.includes("بطاقتين") ||
+          s.includes("قفازين") ||
+          s.includes("ضبابين") ||
+          s.includes("قنبلتين") ||
+          s.includes("موجتين") ||
+          s.includes("اثنين") ||
+          s.includes("اثنان")
+        ) {
+          return 2;
+        }
+        if (s.includes("3 بطاقات") || s.includes("ثلاث بطاقات") || s.includes("ثلاث قفازات")) {
+          return 3;
+        }
+        const m = s.match(/(?:x|×|\*|\b)(\d+)\s*(?:cards?|items?|بطاق(?:ة|ات)?|قفاز(?:ات)?|ضباب|دخان)?\b/i);
+        if (m && m[1]) {
+          const val = parseInt(m[1], 10);
+          if (val >= 1 && val <= 50) return val;
+        }
+        return 0;
+      };
+
       // Helper to classify tool type from raw strings and message types
-      // We accumulate ALL string tokens from a field and check any match.
-      const resolveToolKey = (rawStr: string, msgType?: number): string => {
-        const s = (rawStr || "").toLowerCase();
+      // Explicit mapping only — NEVER defaults to GLOVE
+      const resolveToolKey = (rawStr: string, msgType?: number): string | null => {
+        const s = (rawStr || "").toLowerCase().trim();
+        if (!s && msgType === undefined) return null;
+
         // Song Surge / Wave
         if (s.includes("wave") || s.includes("song") || s.includes("surge") || s.includes("sing") ||
             s.includes("موجة") || s.includes("غناء") || msgType === 8) {
@@ -868,9 +889,11 @@ export class LiveEventPipeline {
             s.includes("مطرقة") || s.includes("تعطيل") || msgType === 6 || msgType === 9) {
           return "HAMMER";
         }
-        // Speed Booster / Challenge
+        // Speed Booster / Challenge / Boost x2 & x3 (BattleCardMsgType 10 & 11)
         if (s.includes("speed") || s.includes("challenge") || s.includes("booster") ||
-            s.includes("سرعة") || s.includes("تحدي")) {
+            s.includes("سرعة") || s.includes("تحدي") || s.includes("boost") ||
+            s.includes("top2") || s.includes("top3") || s.includes("مضاعف") ||
+            msgType === 10 || msgType === 11) {
           return "SPEED_BOOSTER";
         }
         // Shield / Defense
@@ -883,9 +906,12 @@ export class LiveEventPipeline {
             s.includes("قفاز") || s.includes("ضربة") || msgType === 2 || msgType === 12) {
           return "GLOVE";
         }
-        // Unknown — still default to GLOVE but log a warning
-        console.warn(`[TACTICAL_RESOLVE] Could not classify tool: rawStr="${rawStr}" msgType=${msgType} → defaulting to GLOVE`);
-        return "GLOVE";
+
+        // Unknown tool — log warning and return null (never default to GLOVE)
+        if (s || msgType !== undefined) {
+          console.warn(`[TACTICAL_RESOLVE_UNKNOWN] Unrecognized tool representation: rawStr="${rawStr}" msgType=${msgType}`);
+        }
+        return null;
       };
 
       // 1. Check AwardCardNotice (Tools awarded at the end or during battle)
@@ -908,68 +934,265 @@ export class LiveEventPipeline {
           }
         }
 
-        const globalToolKey = resolveToolKey(rawMetaPieces.filter(Boolean).join(" "), data.msgType);
+        const rawMetaText = rawMetaPieces.filter(Boolean).join(" ").toLowerCase();
+        const isMatchGuideGotPowerUps =
+          rawMetaText.includes("gotpowerups") ||
+          rawMetaText.includes("match_guide") ||
+          rawMetaText.includes("power-ups") ||
+          rawMetaText.includes("powerups") ||
+          (Number(data.msgType) === 4 && (data.awardCardNotice.awardedUsers || []).length > 0 && !data.awardCardNotice.cardType);
+
+        const globalToolKey = isMatchGuideGotPowerUps ? null : resolveToolKey(rawMetaPieces.filter(Boolean).join(" "), data.msgType);
         const awardedUsers = data.awardCardNotice.awardedUsers || [];
 
-        for (let idx = 0; idx < awardedUsers.length; idx++) {
-          const userInfo = awardedUsers[idx];
+        if (isMatchGuideGotPowerUps) {
+          console.log(`[TACTICAL_MATCH_GUIDE] 🏆 Match Guide Power-Ups Award notice detected | battle=${targetBattleId || 'live'} | awardedUsers=${awardedUsers.length}`);
+        }
+
+        // Authoritative Battle Resolution & Cross-Tenant Validation
+        let battle: any = null;
+        if (targetBattleId) {
+          battle = await prisma.battle.findUnique({
+            where: { id: targetBattleId },
+            include: { participants: true },
+          });
+
+          // Cross-tenant check: if battle belongs to another tenant, reject immediately
+          if (battle && battle.tenantId !== this.tenantId) {
+            console.warn(`[TACTICAL_CROSS_TENANT_REJECTED] Battle ${targetBattleId} tenant (${battle.tenantId}) does not match pipeline tenant (${this.tenantId})`);
+            return;
+          }
+        }
+
+        // If it's a Match Guide multi-tool award, rank supporters by contribution if possible
+        interface RankedAwardUser {
+          raw: any;
+          originalIndex: number;
+        }
+
+        const rankedAwardedUsers: RankedAwardUser[] = awardedUsers.map((item: any, originalIndex: number) => ({
+          raw: item,
+          originalIndex,
+        }));
+
+        if (isMatchGuideGotPowerUps && awardedUsers.length > 1) {
+          const uids = awardedUsers.map((item: any) => {
+            const u = item.user || item;
+            return String(u.userId || u.displayId || "");
+          }).filter(Boolean);
+
+          const supportersInDb = await prisma.supporter.findMany({
+            where: {
+              tenantId: this.tenantId,
+              platformUserId: { in: uids },
+            },
+            select: { platformUserId: true, totalDiamonds: true },
+          });
+          const diamondsMap = new Map(supportersInDb.map((s) => [s.platformUserId, s.totalDiamonds]));
+
+          rankedAwardedUsers.sort((a, b) => {
+            const uA = a.raw.user || a.raw;
+            const uB = b.raw.user || b.raw;
+            const uidA = String(uA.userId || uA.displayId || "");
+            const uidB = String(uB.userId || uB.displayId || "");
+
+            // 1. Explicit rank if present
+            const rankA = Number(a.raw.rank ?? a.raw.order ?? 0);
+            const rankB = Number(b.raw.rank ?? b.raw.order ?? 0);
+            if (rankA > 0 && rankB > 0) return rankA - rankB;
+
+            // 2. Explicit score/points if present
+            const scoreA = Number(a.raw.score ?? a.raw.points ?? a.raw.diamonds ?? 0);
+            const scoreB = Number(b.raw.score ?? b.raw.points ?? b.raw.diamonds ?? 0);
+            if (scoreA !== scoreB && (scoreA > 0 || scoreB > 0)) return scoreB - scoreA;
+
+            // 3. Database diamonds ranking
+            const diaA = diamondsMap.get(uidA) || 0;
+            const diaB = diamondsMap.get(uidB) || 0;
+            if (diaA !== diaB) return diaB - diaA;
+
+            return a.originalIndex - b.originalIndex;
+          });
+        }
+
+        for (let rankIndex = 0; rankIndex < rankedAwardedUsers.length; rankIndex++) {
+          const entry = rankedAwardedUsers[rankIndex];
+          const userInfo = entry.raw;
+          const idx = entry.originalIndex;
           const user = userInfo.user || userInfo;
           const uid = String(user.userId || user.displayId || "");
           const uname = String(user.displayId || user.nickName || "supporter");
           const displayName = String(user.nickName || uname || "داعم");
 
-          if (uid) {
-            // Find or upsert supporter
-            const supporter = await prisma.supporter.upsert({
+          if (!uid) continue;
+
+          // ── AUTHORITATIVE TEAM RESOLUTION (No relying on gift score alone) ──
+          const explicitTeam = Number(userInfo.teamNumber ?? userInfo.teamId ?? 0);
+          const anchorId = String(userInfo.anchorId || userInfo.anchorUserId || data.awardCardNotice?.anchorId || "");
+
+          let participantTeam: number | null = null;
+          let anchorTeam: number | null = null;
+
+          if (battle?.participants) {
+            const userParticipant = battle.participants.find((p: any) => p.platformUserId === uid);
+            if (userParticipant) {
+              participantTeam = userParticipant.teamNumber;
+            }
+            if (anchorId) {
+              const matchingAnchor = battle.participants.find((p: any) => p.platformUserId === anchorId);
+              if (matchingAnchor) {
+                anchorTeam = matchingAnchor.teamNumber;
+              } else {
+                // If anchorId matches the host streamer's known ID
+                const hostStreamer = await prisma.streamerAccount.findFirst({
+                  where: { tenantId: this.tenantId },
+                  select: { platformUserId: true },
+                });
+                if (hostStreamer?.platformUserId && anchorId === hostStreamer.platformUserId) {
+                  anchorTeam = 1;
+                }
+              }
+            }
+          }
+
+          // Evaluate all authoritative team indicators
+          const detectedTeams = new Set<number>();
+          if (explicitTeam === 1 || explicitTeam === 2) detectedTeams.add(explicitTeam);
+          if (participantTeam === 1 || participantTeam === 2) detectedTeams.add(participantTeam);
+          if (anchorTeam === 1 || anchorTeam === 2) detectedTeams.add(anchorTeam);
+
+          // 1. Conflicting indicators check
+          if (detectedTeams.size > 1) {
+            console.warn(`[TACTICAL_RECONCILIATION_CONFLICT] Conflicting team indicators for uid=${uid}: explicit=${explicitTeam}, participant=${participantTeam}, anchor=${anchorTeam}`);
+            continue;
+          }
+
+          // Fallback grace check: if no indicators but user actively gifted the host in this session
+          if (detectedTeams.size === 0) {
+            const recentHostGift = await prisma.rawEvent.findFirst({
               where: {
-                tenantId_platformUserId: {
-                  tenantId: this.tenantId,
-                  platformUserId: uid,
-                },
-              },
-              update: {
-                username: uname,
-                displayName,
-              },
-              create: {
-                tenantId: this.tenantId,
-                platformUserId: uid,
-                username: uname,
-                displayName,
-                dataConfidence: "VERIFIED",
+                liveSessionId: this.liveSessionId,
+                deduplicationKey: { contains: uid },
+                eventType: "GIFT",
               },
             });
+            if (recentHostGift) {
+              detectedTeams.add(1);
+            }
+          }
 
-            // Per-user card info if present (supports mixed awards in one notice)
-            const userCardInfo = String(userInfo.cardType || userInfo.cardName || userInfo.toolKey || "");
-            const userToolKey = userCardInfo ? resolveToolKey(userCardInfo) : globalToolKey;
+          let authoritativeTeam: number | null = null;
+          if (detectedTeams.size === 1) {
+            authoritativeTeam = Array.from(detectedTeams)[0];
+          }
 
-            // Extract quantity (supports multi-quantity tool grants)
-            const quantity = Number(
-              userInfo.count ||
-              userInfo.quantity ||
-              userInfo.cardNum ||
-              userInfo.cardCount ||
-              userInfo.num ||
-              data.awardCardNotice?.count ||
-              1
-            ) || 1;
+          // 2. Reject confirmed opponent team supporters (Team 2)
+          if (authoritativeTeam === 2) {
+            console.log(`[TACTICAL_TEAM_FILTER] Skipping card grant for confirmed opponent team supporter: uid=${uid}`);
+            continue;
+          }
 
-            // Deterministic deduplication key incorporating battle, user, tool, notice, and index
-            // Ensures multiple different tools awarded to same supporter are both granted,
-            // while guarding against network replays of the exact same event.
-            const noticeId = data.awardCardNotice?.noticeId || data.common?.msgId || data.msgId || "award";
-            const dedupKey = `card_${targetBattleId || "live"}_${uid}_${userToolKey}_${noticeId}_${idx}`;
+          // 3. Reject if membership evidence is missing or insufficient to confirm Team 1
+          if (authoritativeTeam !== 1) {
+            console.warn(`[TACTICAL_RECONCILIATION_INSUFFICIENT_EVIDENCE] Insufficient authoritative membership evidence for uid=${uid} (explicit=${explicitTeam}, battle=${targetBattleId})`);
+            continue;
+          }
 
-            await SmartInventoryService.grantTool({
+          // Comprehensive Quantity Extraction: Check 17+ field variants and text plurals
+          const rawTextForQty = [
+            userInfo.displayContent,
+            userInfo.describe,
+            userInfo.cardName,
+            data.awardCardNotice?.displayContent,
+            data.awardCardNotice?.describe,
+          ]
+            .filter(Boolean)
+            .map((x) => (typeof x === "string" ? x : JSON.stringify(x)))
+            .join(" ");
+
+          const qtyFromFields = extractItemQuantity(userInfo) || extractItemQuantity(data.awardCardNotice);
+          const qtyFromText = extractCountFromText(rawTextForQty);
+          const defaultQuantity = qtyFromFields > 0 ? qtyFromFields : (qtyFromText > 0 ? qtyFromText : 1);
+
+          // Determine tools to award for this user
+          const userCardInfo = String(userInfo.cardType || userInfo.cardName || userInfo.toolKey || "");
+          const toolsToAward: Array<{ toolKey: string; quantity: number }> = [];
+
+          if (userCardInfo) {
+            const singleKey = resolveToolKey(userCardInfo);
+            if (singleKey) {
+              toolsToAward.push({ toolKey: singleKey, quantity: defaultQuantity });
+            }
+          } else if (isMatchGuideGotPowerUps) {
+            // TikTok Match Guide Power-Ups Award Package
+            // Rank 1: Speed Booster (⚡) + Glove (🥊)
+            // Rank 2 & 3: Glove (🥊) + Hammer (🔨)
+            if (rankIndex === 0) {
+              toolsToAward.push({ toolKey: "SPEED_BOOSTER", quantity: 1 });
+              toolsToAward.push({ toolKey: "GLOVE", quantity: 1 });
+            } else {
+              toolsToAward.push({ toolKey: "GLOVE", quantity: 1 });
+              toolsToAward.push({ toolKey: "HAMMER", quantity: 1 });
+            }
+          } else if (globalToolKey) {
+            toolsToAward.push({ toolKey: globalToolKey, quantity: defaultQuantity });
+          }
+
+          // Reject unrecognized or ambiguous cards
+          if (toolsToAward.length === 0) {
+            console.warn(`[TACTICAL_UNRECOGNIZED_CARD] Cannot award unknown tool card to user ${uid}: userCardInfo="${userCardInfo}", global=${globalToolKey}, isMatchGuide=${isMatchGuideGotPowerUps}`);
+            continue;
+          }
+
+          // ── STABLE IDEMPOTENCY IDENTIFIER ──
+          const noticeId = data.awardCardNotice?.noticeId || data.common?.msgId || data.msgId;
+          if (!noticeId) {
+            console.warn(`[TACTICAL_QUARANTINE_UNIDENTIFIED] Award notice lacks upstream event ID, cannot establish idempotency. uid=${uid}`);
+            continue;
+          }
+
+          // Find or upsert supporter
+          const supporter = await prisma.supporter.upsert({
+            where: {
+              tenantId_platformUserId: {
+                tenantId: this.tenantId,
+                platformUserId: uid,
+              },
+            },
+            update: {
+              username: uname,
+              displayName,
+            },
+            create: {
+              tenantId: this.tenantId,
+              platformUserId: uid,
+              username: uname,
+              displayName,
+              dataConfidence: "VERIFIED",
+            },
+          });
+
+          for (const item of toolsToAward) {
+            // Scoped deterministic idempotency key incorporating tenant, battle/session, supporter, tool, notice, and index
+            const dedupKey = `livepulse:${this.tenantId}:${targetBattleId || this.liveSessionId}:${uid}:${item.toolKey}:${noticeId}:${idx}`;
+
+            const grantRes = await SmartInventoryService.grantTool({
               tenantId: this.tenantId,
               supporterId: supporter.id,
-              toolKey: userToolKey,
-              quantity,
+              toolKey: item.toolKey,
+              quantity: item.quantity,
               battleId: targetBattleId || undefined,
               sourceEventId: dedupKey,
-              auditReference: `TikTok Battle Item Card Award (${userToolKey} x${quantity}, Battle: ${targetBattleId || "live"})`,
-            }).catch(() => {});
+              auditReference: `TikTok Battle Card Award (${item.toolKey} x${item.quantity}, Battle: ${targetBattleId || "live"}, User: @${uname})`,
+            });
+
+            if (grantRes.success) {
+              console.log(
+                `[TACTICAL_TOOL_AWARDED] 🎯 Granted ${item.toolKey} x${item.quantity} to @${uname} (${uid}) [Notice: ${noticeId}]`
+              );
+            } else if (grantRes.reason !== "ALREADY_GRANTED") {
+              console.warn(`[TACTICAL_GRANT_REJECTED] Tool grant rejected for ${uid} (${item.toolKey}): ${grantRes.reason}`);
+            }
           }
         }
       }
@@ -977,35 +1200,51 @@ export class LiveEventPipeline {
       // 2. Check Tool Consumptions during battle
       let consumedToolKey: string | null = null;
       let targetUser: any = null;
+      let activationMsgId: string | null = null;
 
       if (data.useCriticalStrikeCard) {
         consumedToolKey = "GLOVE"; // Critical Strike = القفاز x5
         targetUser = data.useCriticalStrikeCard.cardInfo?.sendUser;
+        activationMsgId = data.useCriticalStrikeCard.cardInfo?.noticeId || data.useCriticalStrikeCard.noticeId;
       } else if (data.useSmokeCard) {
         consumedToolKey = "BOOST_FOG"; // Smoke Card = الضباب المعزز (Magic Mist)
         targetUser = data.useSmokeCard.cardInfo?.sendUser;
+        activationMsgId = data.useSmokeCard.cardInfo?.noticeId || data.useSmokeCard.noticeId;
       } else if (data.useExtraTimeCard) {
         consumedToolKey = "TIME_EXTENDER"; // Extra Time = ممدد الوقت (+10s)
         targetUser = data.useExtraTimeCard.cardInfo?.sendUser;
+        activationMsgId = data.useExtraTimeCard.cardInfo?.noticeId || data.useExtraTimeCard.noticeId;
       } else if (data.useWaveCard) {
         consumedToolKey = "SONG_SURGE"; // Wave Card = موجة الأغنية التكتيكية (Song Surge x5)
         targetUser = data.useWaveCard.cardInfo?.sendUser;
+        activationMsgId = data.useWaveCard.cardInfo?.noticeId || data.useWaveCard.noticeId;
       } else if (data.useSpecialEffectCard) {
         consumedToolKey = "HAMMER"; // Special Effect Card = مطرقة الحظر/التعطيل (Victory Hammer / Stun)
         targetUser = data.useSpecialEffectCard.cardInfo?.sendUser;
+        activationMsgId = data.useSpecialEffectCard.cardInfo?.noticeId || data.useSpecialEffectCard.noticeId;
       } else if (data.specialEffectNotice) {
         consumedToolKey = "HAMMER";
         targetUser = data.specialEffectNotice.fromUserId ? { userId: data.specialEffectNotice.fromUserId } : null;
+        activationMsgId = data.specialEffectNotice.noticeId;
       } else if (data.useVaultGloveCard) {
         consumedToolKey = "GLOVE";
         targetUser = data.useVaultGloveCard.cardInfo?.sendUser;
+        activationMsgId = data.useVaultGloveCard.cardInfo?.noticeId || data.useVaultGloveCard.noticeId;
+      } else if (data.useTop2Card) {
+        consumedToolKey = "SPEED_BOOSTER"; // Boost x2 Challenge
+        targetUser = data.useTop2Card.cardInfo?.sendUser;
+        activationMsgId = data.useTop2Card.cardInfo?.noticeId || data.useTop2Card.noticeId;
+      } else if (data.useTop3Card) {
+        consumedToolKey = "SPEED_BOOSTER"; // Boost x3 Challenge
+        targetUser = data.useTop3Card.cardInfo?.sendUser;
+        activationMsgId = data.useTop3Card.cardInfo?.noticeId || data.useTop3Card.noticeId;
       }
 
       if (consumedToolKey && targetUser) {
         const u = targetUser.user || targetUser;
         const uid = String(u.userId || u.displayId || "");
         if (uid) {
-          const supporter = await prisma.supporter.findUnique({
+          let supporter = await prisma.supporter.findUnique({
             where: {
               tenantId_platformUserId: {
                 tenantId: this.tenantId,
@@ -1014,26 +1253,61 @@ export class LiveEventPipeline {
             },
           });
 
-          if (supporter) {
-            const availableGrant = await prisma.toolGrant.findFirst({
-              where: {
+          if (!supporter) {
+            supporter = await prisma.supporter.create({
+              data: {
                 tenantId: this.tenantId,
-                supporterId: supporter.id,
-                toolDefinition: { key: consumedToolKey },
-                status: { in: ["AVAILABLE", "PARTIALLY_USED"] },
+                platformUserId: uid,
+                username: String(u.displayId || u.nickName || `user_${uid}`),
+                displayName: String(u.nickName || u.displayId || "داعم"),
+                dataConfidence: "VERIFIED",
               },
             });
+          }
 
-            if (availableGrant) {
-              await SmartInventoryService.consumeTool({
-                tenantId: this.tenantId,
-                grantId: availableGrant.id,
-                supporterId: supporter.id,
-                quantity: 1,
-                battleId: targetBattleId || undefined,
-                notes: `Live TikTok Battle Card Activation (${consumedToolKey})`,
-              }).catch(() => {});
+          // Stable, deterministic sourceEventId derived from verified upstream ID
+          const rawId = activationMsgId || data.common?.msgId || data.msgId;
+
+          if (!rawId) {
+            // Quarantine un-identified event: record evidence without claiming exactly-once deduplication
+            console.warn(`[TACTICAL_QUARANTINE_UNIDENTIFIED] Tool activation for ${consumedToolKey} lacks upstream event ID. Quarantining event for uid=${uid}`);
+            await SmartInventoryService.consumeTool({
+              tenantId: this.tenantId,
+              supporterId: supporter.id,
+              toolKey: consumedToolKey,
+              quantity: 1,
+              battleId: targetBattleId || undefined,
+              isQuarantined: true,
+              quarantineReason: "UNIDENTIFIED_UPSTREAM_EVENT",
+              notes: `Live TikTok Battle Card Activation (${consumedToolKey}) [QUARANTINED: Missing Upstream ID]`,
+              allowExternalFallback: true,
+            });
+            return;
+          }
+
+          const sourceEventId = `livepulse:${this.tenantId}:${targetBattleId || this.liveSessionId}:${uid}:${consumedToolKey}:${rawId}`;
+
+          try {
+            const consumeRes = await SmartInventoryService.consumeTool({
+              tenantId: this.tenantId,
+              supporterId: supporter.id,
+              toolKey: consumedToolKey,
+              quantity: 1,
+              battleId: targetBattleId || undefined,
+              sourceEventId,
+              notes: `Live TikTok Battle Card Activation (${consumedToolKey})`,
+              allowExternalFallback: true,
+            });
+
+            if (consumeRes.isExternal) {
+              console.log(`[TACTICAL_EXTERNAL_ACTIVATION] Recorded external card activation for ${consumedToolKey} (Supporter: ${uid})`);
+            } else if (consumeRes.duplicate) {
+              console.log(`[TACTICAL_DUPLICATE_CONSUME] Idempotently handled duplicate activation: ${sourceEventId}`);
+            } else {
+              console.log(`[TACTICAL_CONSUMED] Successfully consumed ${consumedToolKey} from grant ${consumeRes.updatedGrant?.id}`);
             }
+          } catch (consumeErr: any) {
+            console.error(`[TACTICAL_CONSUME_ERROR] Failed to consume tool ${consumedToolKey} for ${uid}:`, consumeErr.message);
           }
         }
       }

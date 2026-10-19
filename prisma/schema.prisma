@@ -28,7 +28,10 @@ model Tenant {
   toolDefinitions    ToolDefinition[]
   toolGrants         ToolGrant[]
   toolConsumptions   ToolConsumption[]
+  externalActivations ExternalActivation[]
   inventoryAlerts    InventoryAlert[]
+  toolLedgerMovements ToolLedgerMovement[]
+  streamHealthLogs   StreamHealthLog[]
   hourlyAnalytics    HourlyAnalytics[]
   championPeriods    ChampionPeriod[]
   enigmaReviews      EnigmaReview[]
@@ -162,6 +165,8 @@ model Supporter {
   tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   toolGrants       ToolGrant[]
   toolConsumptions ToolConsumption[]
+  externalActivations ExternalActivation[]
+  ledgerMovements  ToolLedgerMovement[]
   battleScoreEvents BattleScoreEvent[]
 
   @@unique([tenantId, platformUserId])
@@ -209,20 +214,22 @@ model ToolGrant {
   toolDefinition ToolDefinition    @relation(fields: [toolDefinitionId], references: [id], onDelete: Cascade)
   battle         Battle?           @relation(fields: [battleId], references: [id], onDelete: SetNull)
   consumptions   ToolConsumption[]
+  ledgerMovements ToolLedgerMovement[]
   alerts         InventoryAlert[]
 
   @@index([tenantId, status, expiresAt])
 }
 
 model ToolConsumption {
-  id          String   @id @default(cuid())
-  tenantId    String
-  toolGrantId String
-  supporterId String
-  quantity    Int      @default(1)
-  consumedAt  DateTime @default(now())
-  battleId    String?
-  notes       String?
+  id            String   @id @default(cuid())
+  tenantId      String
+  toolGrantId   String
+  supporterId   String
+  quantity      Int      @default(1)
+  consumedAt    DateTime @default(now())
+  battleId      String?
+  sourceEventId String?  @unique
+  notes         String?
 
   tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   toolGrant ToolGrant @relation(fields: [toolGrantId], references: [id], onDelete: Cascade)
@@ -230,6 +237,24 @@ model ToolConsumption {
   battle    Battle?   @relation(fields: [battleId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, consumedAt])
+}
+
+model ExternalActivation {
+  id             String    @id @default(cuid())
+  tenantId       String
+  supporterId    String?
+  platformUserId String?
+  toolKey        String
+  battleId       String?
+  sourceEventId  String?   @unique
+  detailsJson    String?
+  activatedAt    DateTime  @default(now())
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supporter Supporter? @relation(fields: [supporterId], references: [id], onDelete: SetNull)
+  battle    Battle?    @relation(fields: [battleId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, activatedAt])
 }
 
 model InventoryAlert {
@@ -244,6 +269,48 @@ model InventoryAlert {
   toolGrant ToolGrant @relation(fields: [toolGrantId], references: [id], onDelete: Cascade)
 
   @@unique([toolGrantId, alertType])
+}
+
+model ToolLedgerMovement {
+  id               String      @id @default(cuid())
+  tenantId         String
+  toolGrantId      String?
+  supporterId      String?
+  toolKey          String
+  movementType     String      // ACQUISITION, USAGE, DEDUCTION, EXPIRATION, REVERSAL, CORRECTION
+  quantity         Int         // Signed: +1 for ACQUISITION, -1 for USAGE, etc.
+  previousBalance  Int         @default(0)
+  resultingBalance Int         @default(0)
+  sourceEventId    String?
+  reason           String
+  metadataJson     String?
+  createdAt        DateTime    @default(now())
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  toolGrant ToolGrant? @relation(fields: [toolGrantId], references: [id], onDelete: SetNull)
+  supporter Supporter? @relation(fields: [supporterId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, toolKey, createdAt])
+  @@index([tenantId, movementType])
+}
+
+model StreamHealthLog {
+  id                      String    @id @default(cuid())
+  tenantId                String
+  status                  String    // CONNECTED, IDLE_CONNECTED, RECONNECTING, DISCONNECTED, DEGRADED
+  eventProcessingLatencyMs Float    @default(0)
+  eventsReceived          Int       @default(0)
+  eventsPersisted         Int       @default(0)
+  errorCount              Int       @default(0)
+  reconnectCount          Int       @default(0)
+  lastEventAt             DateTime?
+  lastPersistedAt         DateTime?
+  detailsJson             String?
+  timestamp               DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, timestamp])
 }
 
 // -------------------------------------------------------------
@@ -265,12 +332,13 @@ model Battle {
   isManualOverride Boolean @default(false)
   dataConfidence String    @default("VERIFIED")
 
-  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  liveSession      LiveSession        @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
-  participants     BattleParticipant[]
-  scoreEvents      BattleScoreEvent[]
-  toolGrants       ToolGrant[]
-  toolConsumptions ToolConsumption[]
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  liveSession         LiveSession          @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  participants        BattleParticipant[]
+  scoreEvents         BattleScoreEvent[]
+  toolGrants          ToolGrant[]
+  toolConsumptions    ToolConsumption[]
+  externalActivations ExternalActivation[]
 
   @@index([tenantId, startedAt])
 }

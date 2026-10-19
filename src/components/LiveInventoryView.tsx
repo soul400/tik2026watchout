@@ -23,6 +23,8 @@ import {
   Lock,
   KeyRound,
   Loader2,
+  Package,
+  Users,
 } from "lucide-react";
 import { ConfidenceBadge } from "@/components/ConfidenceBadge";
 import { DigitalCounter } from "@/components/DigitalCounter";
@@ -60,6 +62,29 @@ interface GrantItem {
     displayName: string;
     avatarUrl: string | null;
   };
+}
+
+interface AggregatedSupporterTool {
+  key: string;
+  supporterId: string;
+  toolKey: string;
+  supporter: {
+    username: string;
+    displayName: string;
+    avatarUrl: string | null;
+  };
+  toolDefinition: {
+    key: string;
+    name: string;
+    colorHex: string;
+    icon: string;
+  };
+  totalGranted: number;
+  totalConsumed: number;
+  available: number;
+  latestReceivedAt: string;
+  latestExpiresAt: string;
+  grantsCount: number;
 }
 
 interface LiveInventoryViewProps {
@@ -247,6 +272,140 @@ export function LiveInventoryView({ initialCounters, initialGrants }: LiveInvent
     setSearchQuery("");
   };
 
+  // View mode: 'AGGREGATED' (matching reference design) or 'DETAILED' (grant by grant)
+  const [viewMode, setViewMode] = useState<"AGGREGATED" | "DETAILED">("AGGREGATED");
+
+  // Aggregated Supporter Tools Computation (Combining multiple grants for the same supporter and tool into a single balance row)
+  const aggregatedSupporterTools = useMemo(() => {
+    const map = new Map<string, AggregatedSupporterTool>();
+
+    for (const grant of filteredGrants) {
+      const groupKey = `${grant.supporterId}_${grant.toolDefinition.key}`;
+      if (!map.has(groupKey)) {
+        map.set(groupKey, {
+          key: groupKey,
+          supporterId: grant.supporterId,
+          toolKey: grant.toolDefinition.key,
+          supporter: grant.supporter,
+          toolDefinition: grant.toolDefinition,
+          totalGranted: 0,
+          totalConsumed: 0,
+          available: 0,
+          latestReceivedAt: grant.receivedAt,
+          latestExpiresAt: grant.expiresAt,
+          grantsCount: 0,
+        });
+      }
+
+      const item = map.get(groupKey)!;
+      item.totalGranted += grant.quantityGranted;
+      item.totalConsumed += grant.quantityConsumed;
+      item.available = Math.max(0, item.totalGranted - item.totalConsumed);
+      item.grantsCount += 1;
+
+      if (new Date(grant.receivedAt).getTime() > new Date(item.latestReceivedAt).getTime()) {
+        item.latestReceivedAt = grant.receivedAt;
+      }
+      if (new Date(grant.expiresAt).getTime() > new Date(item.latestExpiresAt).getTime()) {
+        item.latestExpiresAt = grant.expiresAt;
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      // Sort by available balance descending, then by latest acquisition time descending
+      if (b.available !== a.available) {
+        return b.available - a.available;
+      }
+      return new Date(b.latestReceivedAt).getTime() - new Date(a.latestReceivedAt).getTime();
+    });
+  }, [filteredGrants]);
+
+  const activeAccountsCount = useMemo(() => {
+    return aggregatedSupporterTools.filter((item) => item.available > 0).length;
+  }, [aggregatedSupporterTools]);
+
+  const getDisplayToolName = (tool: { key: string; name: string }) => {
+    if (tool.key === "GLOVE") return "قفازات المعركة";
+    if (tool.key === "SONG_SURGE") return "موجة الأغنية";
+    if (tool.key === "BOOST_FOG") return "الضباب المعزز";
+    if (tool.key === "TIME_EXTENDER") return "ممدد الوقت";
+    if (tool.key === "SPEED_BOOSTER") return "معزز السرعة";
+    if (tool.key === "HAMMER") return "مطرقة الحظر";
+    if (tool.key === "SHIELD_DEFENSE") return "درع الصمود";
+    return tool.name;
+  };
+
+  const getToolTacticalPerk = (key: string) => {
+    switch (key) {
+      case "GLOVE":
+        return "ضربة قاضية x5 🥊";
+      case "SONG_SURGE":
+        return "مضاعفة النقاط x5 🎤";
+      case "BOOST_FOG":
+        return "حجب نقاط الجولة 30s 🌫️";
+      case "TIME_EXTENDER":
+        return "تمديد الوقت +10s ⏱️";
+      case "SPEED_BOOSTER":
+        return "معزز سرعة التحدي ⚡";
+      case "HAMMER":
+        return "مطرقة تعطيل الخصم 🔨";
+      case "SHIELD_DEFENSE":
+        return "درع صمود دفاعي 🛡️";
+      default:
+        return "أداة تكتيكية معتمدة 📦";
+    }
+  };
+
+  const getToolEmoji = (key: string) => {
+    switch (key) {
+      case "GLOVE":
+        return "🥊";
+      case "SONG_SURGE":
+        return "🎤";
+      case "BOOST_FOG":
+        return "🌫️";
+      case "TIME_EXTENDER":
+        return "⏱️";
+      case "SPEED_BOOSTER":
+        return "⚡";
+      case "HAMMER":
+        return "🔨";
+      case "SHIELD_DEFENSE":
+        return "🛡️";
+      default:
+        return "📦";
+    }
+  };
+
+  const formatAcquisitionTime = (isoString: string) => {
+    try {
+      const d = new Date(isoString);
+      if (isNaN(d.getTime())) return isoString;
+      const formatter = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Asia/Riyadh",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour12: false,
+      });
+      const parts = formatter.formatToParts(d);
+      const getPart = (type: string) => parts.find((p) => p.type === type)?.value || "";
+      const hours = getPart("hour");
+      const minutes = getPart("minute");
+      const seconds = getPart("second");
+      const year = getPart("year");
+      const month = getPart("month");
+      const day = getPart("day");
+      return `${hours}:${minutes}:${seconds} ${year}-${month}-${day}`;
+    } catch {
+      const d = new Date(isoString);
+      return d.toISOString().replace("T", " ").substring(0, 19);
+    }
+  };
+
   const formatRemainingTime = (expiresAtStr: string) => {
     const diffMs = new Date(expiresAtStr).getTime() - Date.now();
     if (diffMs <= 0) return { text: "منتهية الصلاحية", isExpired: true, isSoon: false };
@@ -383,25 +542,44 @@ export function LiveInventoryView({ initialCounters, initialGrants }: LiveInvent
       </div>
 
       {/* Grants Activity Ledger with Advanced Filtering */}
-      <div className="hud-deck rounded-2xl p-6 md:p-8">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-          <div>
-            <h3 className="text-xl font-bold text-white flex items-center gap-2">
-              <Layers className="w-5 h-5 text-turquoise" />
-              سجل الأدوات التكتيكية المرصودة في البث
-            </h3>
-            <p className="text-xs text-secondaryText mt-1">
-              تسجيل لحظي وتلقائي للأدوات الممنوحة للداعمين مع مهلة انتهاء الـ 120 ساعة وفلترة تكتيكية متقدمة
-            </p>
+      <div className="space-y-4">
+        {/* View Switcher Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-background/80 p-2.5 rounded-2xl border border-white/10">
+          <div className="flex items-center gap-2 bg-surface/90 p-1 rounded-xl border border-white/10 w-fit">
+            <button
+              onClick={() => setViewMode("AGGREGATED")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs md:text-sm font-bold transition-all ${
+                viewMode === "AGGREGATED"
+                  ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
+                  : "text-secondaryText hover:text-white"
+              }`}
+            >
+              <Package className="w-4 h-4" />
+              <span>أرصدة الأدوات للداعمين (مجمع)</span>
+            </button>
+            <button
+              onClick={() => setViewMode("DETAILED")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs md:text-sm font-bold transition-all ${
+                viewMode === "DETAILED"
+                  ? "bg-turquoise text-slate-950 shadow-md shadow-turquoise/20"
+                  : "text-secondaryText hover:text-white"
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              <span>سجل العمليات والتدقيق (120H TTL)</span>
+            </button>
           </div>
+
           <div className="flex items-center gap-2">
-            <span className="text-xs font-mono text-turquoise px-3 py-1 rounded-full bg-turquoise/10 border border-turquoise/30">
-              عرض {filteredGrants.length} من {grants.length} سجل
+            <span className="text-xs font-mono text-secondaryText px-3 py-1.5 rounded-full bg-surface border border-white/10">
+              {viewMode === "AGGREGATED"
+                ? `عرض ${aggregatedSupporterTools.length} حساب مجمع (${activeAccountsCount} نشط)`
+                : `عرض ${filteredGrants.length} من ${grants.length} سجل`}
             </span>
             {hasActiveFilters && (
               <button
                 onClick={resetFilters}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono text-rose-300 bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono text-rose-300 bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 transition-colors"
                 title="إلغاء جميع الفلاتر"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
@@ -412,7 +590,7 @@ export function LiveInventoryView({ initialCounters, initialGrants }: LiveInvent
         </div>
 
         {/* Interactive Filter Toolbar */}
-        <div className="bg-background/60 p-4 rounded-xl border border-white/5 space-y-3 mb-6">
+        <div className="bg-background/60 p-4 rounded-xl border border-white/5 space-y-3">
           <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-3">
             {/* Search Input */}
             <div className="relative flex-1">
@@ -526,150 +704,448 @@ export function LiveInventoryView({ initialCounters, initialGrants }: LiveInvent
           </div>
         </div>
 
-        {/* Ledger Table */}
-        <div className="overflow-x-auto">
-          {filteredGrants.length === 0 ? (
-            <div className="py-12 text-center text-secondaryText">
-              <p className="text-base font-bold text-white">
-                {grants.length === 0
-                  ? "لا توجد أدوات ممنوحة مسجلة بعد"
-                  : "لا توجد نتائج تطابق الفلاتر المحددة"}
-              </p>
-              <p className="text-xs font-mono mt-1 text-secondaryText">
-                {grants.length === 0
-                  ? "سيتم رصد الأدوات الممنوحة تلقائياً فور نزولها أو إهدائها في جولات التحدي الحية"
-                  : "جرب تغيير معايير البحث أو تصفية نوع الأداة والحالة لعرض النتائج"}
-              </p>
-              {hasActiveFilters && (
-                <button
-                  onClick={resetFilters}
-                  className="mt-4 px-4 py-2 rounded-xl text-xs font-mono text-turquoise bg-turquoise/10 border border-turquoise/30 hover:bg-turquoise/20 transition-colors"
-                >
-                  إعادة ضبط جميع الفلاتر
-                </button>
+        {/* View Content: AGGREGATED (Harmonized Tactical Dark Glassmorphism) OR DETAILED (Ledger) */}
+        {viewMode === "AGGREGATED" ? (
+          <div className="hud-deck rounded-3xl p-6 md:p-8 relative overflow-hidden">
+            {/* Ambient Tactical Glows */}
+            <div className="absolute top-0 right-0 w-96 h-96 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute bottom-0 left-0 w-80 h-80 bg-turquoise/5 rounded-full blur-3xl pointer-events-none" />
+
+            {/* Header Deck */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-6 border-b border-white/10 relative z-10">
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 shadow-lg shadow-amber-500/10">
+                  <Package className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg md:text-xl font-black text-white tracking-tight">
+                      أرصدة الأدوات للداعمين والمستخدمين في المعركة
+                    </h3>
+                    <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                      LIVE BALANCES
+                    </span>
+                  </div>
+                  <p className="text-xs text-secondaryText mt-1 max-w-2xl leading-relaxed">
+                    تحديث لحظي وتجميع ذكي لأرصدة القفازات والأدوات المحمولة مع مهلة الصلاحية الـ 120 ساعة ومتابعة الجاهزية التكتيكية قبل الجولات
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-amber-400/40 bg-amber-500/10 text-amber-300 font-bold font-mono text-xs shadow-sm">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                  {activeAccountsCount > 0 ? activeAccountsCount : aggregatedSupporterTools.length} حسابات نشطة
+                </span>
+                <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-turquoise/30 bg-turquoise/10 text-turquoise font-bold font-mono text-xs">
+                  <Zap className="w-3.5 h-3.5" />
+                  {aggregatedSupporterTools.reduce((acc, r) => acc + r.available, 0)} رصيد قتالي متاح
+                </span>
+              </div>
+            </div>
+
+            {/* Aggregated Table */}
+            <div className="overflow-x-auto relative z-10 mt-4">
+              {aggregatedSupporterTools.length === 0 ? (
+                <div className="py-16 text-center text-secondaryText">
+                  <Package className="w-12 h-12 text-secondaryText/40 mx-auto mb-3" />
+                  <p className="text-base font-bold text-white">
+                    {grants.length === 0
+                      ? "لا توجد أدوات ممنوحة مسجلة بعد"
+                      : "لا توجد نتائج تطابق الفلاتر المحددة"}
+                  </p>
+                  <p className="text-xs font-mono mt-1 text-secondaryText">
+                    {grants.length === 0
+                      ? "سيتم تجميع وتحديث أرصدة الأدوات للداعمين تلقائياً فور منحها في جولات البث المباشر"
+                      : "جرب تغيير معايير البحث أو اختيار نوع أداة أو حالة أخرى"}
+                  </p>
+                  {hasActiveFilters && (
+                    <button
+                      onClick={resetFilters}
+                      className="mt-4 px-4 py-2 rounded-xl text-xs font-mono text-turquoise bg-turquoise/10 border border-turquoise/30 hover:bg-turquoise/20 transition-colors"
+                    >
+                      إعادة ضبط جميع الفلاتر
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <table className="w-full text-sm text-right">
+                  <thead>
+                    <tr className="border-b border-white/10 text-xs text-secondaryText uppercase font-mono tracking-wider">
+                      <th className="py-4 pr-3 text-right">الداعم / المستخدم</th>
+                      <th className="py-4 text-right">الأداة والتأثير التكتيكي</th>
+                      <th className="py-4 text-center">الرصيد المتاح</th>
+                      <th className="py-4 text-center">إجمالي الحيازة</th>
+                      <th className="py-4 text-center">المستهلك منها</th>
+                      <th className="py-4 text-center">الجاهزية التكتيكية</th>
+                      <th className="py-4 text-center">الصلاحية (120H)</th>
+                      <th className="py-4 text-center">آخر حيازة</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5 font-sans">
+                    {aggregatedSupporterTools.map((row) => {
+                      const remTime = formatRemainingTime(row.latestExpiresAt);
+                      const isExpired = remTime.isExpired;
+                      const isExpiringSoon = remTime.isSoon;
+                      const isReady = row.available > 0 && !isExpired;
+                      const percentConsumed = row.totalGranted > 0 ? Math.round((row.totalConsumed / row.totalGranted) * 100) : 0;
+
+                      return (
+                        <tr key={row.key} className="hover:bg-white/[0.025] transition-colors group">
+                          {/* 1. الداعم / المستخدم */}
+                          <td className="py-4 pr-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-surface border border-white/10 flex items-center justify-center font-bold text-turquoise text-sm overflow-hidden shrink-0 shadow-inner group-hover:border-turquoise/40 transition-colors">
+                                {row.supporter.avatarUrl ? (
+                                  <img
+                                    src={row.supporter.avatarUrl}
+                                    alt={row.supporter.displayName}
+                                    className="w-full h-full object-cover"
+                                  />
+                                ) : (
+                                  <span>{row.supporter.displayName?.charAt(0) || row.supporter.username.charAt(0)}</span>
+                                )}
+                              </div>
+                              <div className="text-right">
+                                <p className="font-bold text-white text-sm leading-tight group-hover:text-turquoise transition-colors">
+                                  {row.supporter.username}@
+                                </p>
+                                <p className="text-xs text-secondaryText leading-tight mt-0.5 truncate max-w-[150px]">
+                                  {row.supporter.displayName}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 2. الأداة والتأثير التكتيكي */}
+                          <td className="py-4">
+                            <div className="flex items-center gap-2.5">
+                              <span className="text-xl shrink-0">{getToolEmoji(row.toolDefinition.key)}</span>
+                              <div>
+                                <span className="font-bold text-white text-sm block leading-tight">
+                                  {getDisplayToolName(row.toolDefinition)}
+                                </span>
+                                <span className="inline-block text-[10px] font-mono text-amber-400/90 font-medium mt-0.5">
+                                  {getToolTacticalPerk(row.toolDefinition.key)}
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 3. الرصيد المتاح (Glowing Cyber Gold Badge) */}
+                          <td className="py-4 text-center">
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-amber-500 to-amber-300 text-slate-950 font-black text-sm flex items-center justify-center shadow-lg shadow-amber-500/30 mx-auto digi-number">
+                              {row.available}
+                            </div>
+                          </td>
+
+                          {/* 4. إجمالي الحيازة */}
+                          <td className="py-4 text-center font-mono font-bold text-white text-sm md:text-base digi-number">
+                            {row.totalGranted}
+                          </td>
+
+                          {/* 5. المستهلك منها */}
+                          <td className="py-4 text-center font-mono text-secondaryText text-sm md:text-base digi-number">
+                            {row.totalConsumed}
+                          </td>
+
+                          {/* 6. الجاهزية التكتيكية والمعدل */}
+                          <td className="py-4 text-center">
+                            <div className="flex flex-col items-center justify-center gap-1.5">
+                              {isExpired ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                                  <XCircle className="w-3 h-3" />
+                                  منتهية الصلاحية
+                                </span>
+                              ) : row.available <= 0 ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-zinc-500/10 text-secondaryText border border-zinc-500/20">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  مستهلكة بالكامل
+                                </span>
+                              ) : isExpiringSoon ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 shadow-sm shadow-amber-500/10 animate-pulse">
+                                  <Clock className="w-3 h-3" />
+                                  قريبة من الانتهاء ⏳
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shadow-sm shadow-emerald-500/10">
+                                  <Zap className="w-3 h-3" />
+                                  جاهز للقتال ⚡
+                                </span>
+                              )}
+
+                              {/* Mini consumption bar */}
+                              <div className="w-20 bg-white/10 rounded-full h-1 overflow-hidden" title={`نسبة الاستهلاك: ${percentConsumed}%`}>
+                                <div
+                                  className={`h-full rounded-full ${
+                                    isReady ? "bg-amber-400" : "bg-secondaryText/40"
+                                  }`}
+                                  style={{ width: `${Math.min(100, Math.max(5, percentConsumed))}%` }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 7. الصلاحية (120H TTL) */}
+                          <td className="py-4 text-center font-mono text-xs">
+                            <span
+                              suppressHydrationWarning
+                              className={`font-semibold block ${
+                                isExpired
+                                  ? "text-rose-400"
+                                  : isExpiringSoon
+                                  ? "text-amber-300 font-bold"
+                                  : "text-emerald-400"
+                              }`}
+                            >
+                              {remTime.text}
+                            </span>
+                            <span className="text-[10px] text-secondaryText/70 block mt-0.5" suppressHydrationWarning>
+                              {new Date(row.latestExpiresAt).toLocaleDateString("ar-SA")}
+                            </span>
+                          </td>
+
+                          {/* 8. آخر حيازة */}
+                          <td className="py-4 text-center font-mono text-xs text-secondaryText">
+                            <span className="text-white font-medium block" suppressHydrationWarning>
+                              {new Date(row.latestReceivedAt).toLocaleTimeString("ar-SA", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              })}
+                            </span>
+                            <span className="text-[10px] text-secondaryText/70 block mt-0.5" suppressHydrationWarning>
+                              {new Date(row.latestReceivedAt).toLocaleDateString("ar-SA")}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               )}
             </div>
-          ) : (
-            <table className="w-full text-sm text-right">
-              <thead>
-                <tr className="border-b border-white/10 text-xs text-secondaryText uppercase font-mono">
-                  <th className="pb-3 pr-2">الداعم المستفيد</th>
-                  <th className="pb-3">الأداة التكتيكية</th>
-                  <th className="pb-3 text-center">الكمية (المتبقي / الإجمالي)</th>
-                  <th className="pb-3 text-center">تاريخ الاستلام</th>
-                  <th className="pb-3 text-center">الصلاحية المتبقية (120H)</th>
-                  <th className="pb-3 text-center">الحالة الحالية</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5 font-sans">
-                {filteredGrants.map((grant) => {
-                  const remQty = Math.max(0, grant.quantityGranted - grant.quantityConsumed);
-                  const remTime = formatRemainingTime(grant.expiresAt);
-                  const isAvailable = remQty > 0 && !remTime.isExpired;
+          </div>
+        ) : (
+          /* Detailed Ledger View */
+          <div className="hud-deck rounded-3xl p-6 md:p-8 relative overflow-hidden">
+            {/* Ambient Tactical Glows */}
+            <div className="absolute top-0 right-0 w-96 h-96 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute bottom-0 left-0 w-80 h-80 bg-turquoise/5 rounded-full blur-3xl pointer-events-none" />
 
-                  return (
-                    <tr key={grant.id} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="py-4 pr-2 flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-surface border border-white/10 flex items-center justify-center font-bold text-turquoise text-sm overflow-hidden shrink-0">
-                          {grant.supporter.avatarUrl ? (
-                            <img
-                              src={grant.supporter.avatarUrl}
-                              alt={grant.supporter.displayName}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <span>{grant.supporter.displayName.charAt(0)}</span>
-                          )}
-                        </div>
-                        <div>
-                          <p className="font-bold text-white text-sm">{grant.supporter.displayName}</p>
-                          <p className="text-xs text-secondaryText font-mono">@{grant.supporter.username}</p>
-                        </div>
-                      </td>
-                      <td className="py-4">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="w-2.5 h-2.5 rounded-full shrink-0"
-                            style={{ backgroundColor: grant.toolDefinition.colorHex }}
-                          />
-                          <span className="font-bold text-white text-sm">
-                            {grant.toolDefinition.name}
-                          </span>
-                        </div>
-                        {grant.auditReference && (
-                          <span className="text-[10px] text-secondaryText font-mono block mt-0.5">
-                            {grant.auditReference}
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-4 text-center font-mono">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <span className="font-bold text-turquoise text-base">{remQty}</span>
-                          <span className="text-secondaryText text-xs">/</span>
-                          <span className="text-secondaryText text-xs font-semibold">{grant.quantityGranted}</span>
-                        </div>
-                        {grant.quantityConsumed > 0 && (
-                          <span className="text-[10px] text-secondaryText block">
-                            (استُهلك {grant.quantityConsumed})
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-4 text-center font-mono text-xs text-secondaryText">
-                        {new Date(grant.receivedAt).toLocaleTimeString("ar-SA", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                          second: "2-digit",
-                        })}
-                        <span className="block text-[10px] text-secondaryText/70">
-                          {new Date(grant.receivedAt).toLocaleDateString("ar-SA")}
-                        </span>
-                      </td>
-                      <td className="py-4 text-center font-mono text-xs">
-                        <span
-                          className={`font-semibold ${
-                            remTime.isExpired
-                              ? "text-rose-400"
-                              : remTime.isSoon
-                              ? "text-amber-300"
-                              : "text-emerald-300"
-                          }`}
-                        >
-                          {remTime.text}
-                        </span>
-                        <span className="text-[10px] text-secondaryText block mt-0.5">
-                          {new Date(grant.expiresAt).toLocaleDateString("ar-SA")}
-                        </span>
-                      </td>
-                      <td className="py-4 text-center">
-                        {remTime.isExpired || grant.status === "EXPIRED" ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                            <XCircle className="w-3 h-3" />
-                            منتهية الصلاحية
-                          </span>
-                        ) : remQty <= 0 || grant.status === "FULLY_USED" ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-zinc-500/10 text-secondaryText border border-zinc-500/20">
-                            <CheckCircle2 className="w-3 h-3" />
-                            مستهلكة بالكامل
-                          </span>
-                        ) : remTime.isSoon || grant.status === "EXPIRING_SOON" ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-amber-500/10 text-amber-300 border border-amber-500/20">
-                            <Clock className="w-3 h-3" />
-                            قريبة من الانتهاء ⏳
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-turquoise/10 text-turquoise border border-turquoise/20">
-                            <Zap className="w-3 h-3" />
-                            نشطة ومتاحة ⚡
-                          </span>
-                        )}
-                      </td>
+            {/* Header Deck */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-6 border-b border-white/10 relative z-10">
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 shadow-lg shadow-amber-500/10">
+                  <Layers className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg md:text-xl font-black text-white tracking-tight">
+                      سجل الأدوات التكتيكية المرصودة في البث (تفصيلي)
+                    </h3>
+                    <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                      AUDITED ENTRIES
+                    </span>
+                  </div>
+                  <p className="text-xs text-secondaryText mt-1 max-w-2xl leading-relaxed">
+                    تسجيل لحظي وتلقائي للأدوات الممنوحة للداعمين مع مهلة انتهاء الـ 120 ساعة وتتبع دقيق للدفعة والمطابقة التكتيكية
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-amber-400/40 bg-amber-500/10 text-amber-300 font-bold font-mono text-xs shadow-sm">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                  {filteredGrants.length} إدخالات مقيدة
+                </span>
+                <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-turquoise/30 bg-turquoise/10 text-turquoise font-bold font-mono text-xs">
+                  <Zap className="w-3.5 h-3.5" />
+                  {filteredGrants.reduce((acc, g) => acc + Math.max(0, g.quantityGranted - g.quantityConsumed), 0)} رصيد متاح
+                </span>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto relative z-10 mt-4">
+              {filteredGrants.length === 0 ? (
+                <div className="py-16 text-center text-secondaryText">
+                  <Package className="w-12 h-12 text-secondaryText/40 mx-auto mb-3" />
+                  <p className="text-base font-bold text-white">
+                    {grants.length === 0
+                      ? "لا توجد أدوات ممنوحة مسجلة بعد"
+                      : "لا توجد نتائج تطابق الفلاتر المحددة"}
+                  </p>
+                  <p className="text-xs font-mono mt-1 text-secondaryText">
+                    {grants.length === 0
+                      ? "سيتم رصد الأدوات الممنوحة تلقائياً فور نزولها أو إهدائها في جولات التحدي الحية"
+                      : "جرب تغيير معايير البحث أو تصفية نوع الأداة والحالة لعرض النتائج"}
+                  </p>
+                </div>
+              ) : (
+                <table className="w-full text-sm text-right">
+                  <thead>
+                    <tr className="border-b border-white/10 text-xs text-secondaryText uppercase font-mono tracking-wider">
+                      <th className="py-4 pr-3 text-right">الداعم المستفيد</th>
+                      <th className="py-4 text-right">الأداة والتأثير التكتيكي</th>
+                      <th className="py-4 text-center">الرصيد المتاح</th>
+                      <th className="py-4 text-center">إجمالي الحيازة</th>
+                      <th className="py-4 text-center">المستهلك منها</th>
+                      <th className="py-4 text-center">الجاهزية التكتيكية</th>
+                      <th className="py-4 text-center">الصلاحية (120H)</th>
+                      <th className="py-4 text-center">تاريخ ووقت الاستلام</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
+                  </thead>
+                  <tbody className="divide-y divide-white/5 font-sans">
+                    {filteredGrants.map((grant) => {
+                      const remQty = Math.max(0, grant.quantityGranted - grant.quantityConsumed);
+                      const remTime = formatRemainingTime(grant.expiresAt);
+                      const isExpired = remTime.isExpired || grant.status === "EXPIRED";
+                      const isExpiringSoon = !isExpired && (remTime.isSoon || grant.status === "EXPIRING_SOON");
+                      const isReady = remQty > 0 && !isExpired;
+                      const percentConsumed = grant.quantityGranted > 0 ? Math.round((grant.quantityConsumed / grant.quantityGranted) * 100) : 0;
+
+                      return (
+                        <tr key={grant.id} className="hover:bg-white/[0.025] transition-colors group">
+                          {/* 1. الداعم المستفيد */}
+                          <td className="py-4 pr-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-surface border border-white/10 flex items-center justify-center font-bold text-turquoise text-sm overflow-hidden shrink-0 shadow-inner group-hover:border-turquoise/40 transition-colors">
+                                {grant.supporter.avatarUrl ? (
+                                  <img
+                                    src={grant.supporter.avatarUrl}
+                                    alt={grant.supporter.displayName}
+                                    className="w-full h-full object-cover"
+                                  />
+                                ) : (
+                                  <span>{grant.supporter.displayName.charAt(0)}</span>
+                                )}
+                              </div>
+                              <div className="text-right">
+                                <p className="font-bold text-white text-sm leading-tight group-hover:text-turquoise transition-colors">
+                                  @{grant.supporter.username}
+                                </p>
+                                <p className="text-xs text-secondaryText leading-tight mt-0.5 truncate max-w-[150px]">
+                                  {grant.supporter.displayName}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 2. الأداة والتأثير التكتيكي */}
+                          <td className="py-4">
+                            <div className="flex items-center gap-2.5">
+                              <span className="text-xl shrink-0">{getToolEmoji(grant.toolDefinition.key)}</span>
+                              <div>
+                                <span className="font-bold text-white text-sm block leading-tight">
+                                  {getDisplayToolName(grant.toolDefinition)}
+                                </span>
+                                <span className="inline-block text-[10px] font-mono text-amber-400/90 font-medium mt-0.5">
+                                  {getToolTacticalPerk(grant.toolDefinition.key)}
+                                </span>
+                                {grant.auditReference && (
+                                  <span className="text-[10px] text-secondaryText/70 font-mono block mt-0.5">
+                                    {grant.auditReference}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 3. الرصيد المتاح (Glowing Cyber Gold Badge) */}
+                          <td className="py-4 text-center">
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-amber-500 to-amber-300 text-slate-950 font-black text-sm flex items-center justify-center shadow-lg shadow-amber-500/30 mx-auto digi-number">
+                              {remQty}
+                            </div>
+                          </td>
+
+                          {/* 4. إجمالي الحيازة */}
+                          <td className="py-4 text-center font-mono font-bold text-white text-sm md:text-base digi-number">
+                            {grant.quantityGranted}
+                          </td>
+
+                          {/* 5. المستهلك منها */}
+                          <td className="py-4 text-center font-mono text-secondaryText text-sm md:text-base digi-number">
+                            {grant.quantityConsumed}
+                          </td>
+
+                          {/* 6. الجاهزية التكتيكية والمعدل */}
+                          <td className="py-4 text-center">
+                            <div className="flex flex-col items-center justify-center gap-1.5">
+                              {isExpired ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                                  <XCircle className="w-3 h-3" />
+                                  منتهية الصلاحية
+                                </span>
+                              ) : remQty <= 0 || grant.status === "FULLY_USED" ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-zinc-500/10 text-secondaryText border border-zinc-500/20">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  مستهلكة بالكامل
+                                </span>
+                              ) : isExpiringSoon ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 shadow-sm shadow-amber-500/10 animate-pulse">
+                                  <Clock className="w-3 h-3" />
+                                  قريبة من الانتهاء ⏳
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shadow-sm shadow-emerald-500/10">
+                                  <Zap className="w-3 h-3" />
+                                  جاهز للقتال ⚡
+                                </span>
+                              )}
+
+                              {/* Mini consumption bar */}
+                              <div className="w-20 bg-white/10 rounded-full h-1 overflow-hidden" title={`نسبة الاستهلاك: ${percentConsumed}%`}>
+                                <div
+                                  className={`h-full rounded-full ${
+                                    isReady ? "bg-amber-400" : "bg-secondaryText/40"
+                                  }`}
+                                  style={{ width: `${Math.min(100, Math.max(5, percentConsumed))}%` }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 7. الصلاحية (120H) */}
+                          <td className="py-4 text-center font-mono text-xs">
+                            <span
+                              suppressHydrationWarning
+                              className={`font-semibold block ${
+                                isExpired
+                                  ? "text-rose-400"
+                                  : isExpiringSoon
+                                  ? "text-amber-300 font-bold"
+                                  : "text-emerald-400"
+                              }`}
+                            >
+                              {remTime.text}
+                            </span>
+                            <span className="text-[10px] text-secondaryText/70 block mt-0.5" suppressHydrationWarning>
+                              {new Date(grant.expiresAt).toLocaleDateString("ar-SA")}
+                            </span>
+                          </td>
+
+                          {/* 8. تاريخ ووقت الاستلام */}
+                          <td className="py-4 text-center font-mono text-xs text-secondaryText">
+                            <span className="text-white font-medium block" suppressHydrationWarning>
+                              {new Date(grant.receivedAt).toLocaleTimeString("ar-SA", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              })}
+                            </span>
+                            <span className="block text-[10px] text-secondaryText/70" suppressHydrationWarning>
+                              {new Date(grant.receivedAt).toLocaleDateString("ar-SA")}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Password-Protected Reset Confirmation Modal */}

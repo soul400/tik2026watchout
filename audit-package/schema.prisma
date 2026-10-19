@@ -1,0 +1,465 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// 1. Multi-Tenancy & Access Control
+// -------------------------------------------------------------
+
+model Tenant {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  plan        String   @default("PRO") // FREE, PRO, ENTERPRISE
+  status      String   @default("ACTIVE") // ACTIVE, SUSPENDED
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users              TenantMembership[]
+  streamers          StreamerAccount[]
+  liveSessions       LiveSession[]
+  supporters         Supporter[]
+  battles            Battle[]
+  toolDefinitions    ToolDefinition[]
+  toolGrants         ToolGrant[]
+  toolConsumptions   ToolConsumption[]
+  inventoryAlerts    InventoryAlert[]
+  hourlyAnalytics    HourlyAnalytics[]
+  championPeriods    ChampionPeriod[]
+  enigmaReviews      EnigmaReview[]
+  reports            AnalyticalReport[]
+  auditLogs          AuditLog[]
+  telegramConfig     TelegramConfig?
+  telegramLogs       TelegramNotificationLog[]
+}
+
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  name        String?
+  avatarUrl   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships TenantMembership[]
+  auditLogs   AuditLog[]
+}
+
+model TenantMembership {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      String   @default("STREAMER_OWNER") // PLATFORM_ADMIN, STREAMER_OWNER, STREAMER_MANAGER, ANALYST
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+}
+
+// -------------------------------------------------------------
+// 2. Streamer & Integration Connection
+// -------------------------------------------------------------
+
+model StreamerAccount {
+  id             String   @id @default(cuid())
+  tenantId       String
+  username       String   // e.g. mohra.2000
+  platformUserId String?  // Persistent TikTok Room / SecUid
+  displayName    String?
+  avatarUrl      String?
+  status         String   @default("ACTIVE") // ACTIVE, INACTIVE
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  liveSessions LiveSession[]
+  connections  IntegrationConnection[]
+
+  @@unique([tenantId, username])
+}
+
+model IntegrationConnection {
+  id                String   @id @default(cuid())
+  streamerAccountId String
+  provider          String   @default("TIKTOK_LIVE_CONNECTOR")
+  status            String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED, ERROR, CONNECTING
+  lastConnectedAt   DateTime?
+  lastError         String?
+  retryCount        Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  streamerAccount StreamerAccount @relation(fields: [streamerAccountId], references: [id], onDelete: Cascade)
+}
+
+// -------------------------------------------------------------
+// 3. Live Sessions & Event Ingestion
+// -------------------------------------------------------------
+
+model LiveSession {
+  id                String    @id @default(cuid())
+  tenantId          String
+  streamerAccountId String
+  roomId            String?
+  status            String    @default("LIVE") // LIVE, ENDED
+  startedAt         DateTime  @default(now())
+  endedAt           DateTime?
+  totalDiamonds     Int       @default(0)
+  totalLikes        Int       @default(0)
+  totalComments     Int       @default(0)
+  peakViewers       Int       @default(0)
+  dataConfidence    String    @default("VERIFIED") // VERIFIED, PARTIAL, ESTIMATED
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  streamerAccount StreamerAccount @relation(fields: [streamerAccountId], references: [id], onDelete: Cascade)
+  battles         Battle[]
+  rawEvents       RawEvent[]
+
+  @@index([tenantId, startedAt])
+}
+
+model RawEvent {
+  id               String   @id @default(cuid())
+  liveSessionId    String
+  deduplicationKey String   @unique
+  eventType        String   // gift, chat, like, battle, etc.
+  sourceTimestamp  DateTime
+  receivedAt       DateTime @default(now())
+  payload          String   // JSON stringified payload
+  processingStatus String   @default("PROCESSED") // PROCESSED, FAILED, IGNORED
+
+  liveSession LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+
+  @@index([liveSessionId, eventType])
+}
+
+// -------------------------------------------------------------
+// 4. Supporters & Community Identity
+// -------------------------------------------------------------
+
+model Supporter {
+  id              String   @id @default(cuid())
+  tenantId        String
+  platformUserId  String   // persistent secUid or userId from TikTok
+  username        String
+  displayName     String
+  avatarUrl       String?
+  category        String   @default("RISING") // CONTINUOUS, ACTIVE, BATTLE_PARTICIPANT, CHATTER, RETURNING, RISING
+  totalDiamonds   Int      @default(0)
+  totalLikes      Int      @default(0)
+  totalComments   Int      @default(0)
+  firstObservedAt DateTime @default(now())
+  lastObservedAt  DateTime @default(now())
+  dataConfidence  String   @default("VERIFIED")
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  toolGrants       ToolGrant[]
+  toolConsumptions ToolConsumption[]
+  battleScoreEvents BattleScoreEvent[]
+
+  @@unique([tenantId, platformUserId])
+  @@index([tenantId, totalDiamonds])
+}
+
+// -------------------------------------------------------------
+// 5. Tools & Smart Inventory
+// -------------------------------------------------------------
+
+model ToolDefinition {
+  id           String   @id @default(cuid())
+  tenantId     String
+  key          String   // GLOVE, BOOST_FOG, HAMMER, etc.
+  name         String   // القفاز، الضباب المعزز
+  description  String?
+  icon         String   @default("Shield")
+  colorHex     String   @default("#21D4D8")
+  defaultHours Int      @default(120) // 5 days = 120 hours
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  toolGrants ToolGrant[]
+
+  @@unique([tenantId, key])
+}
+
+model ToolGrant {
+  id              String    @id @default(cuid())
+  tenantId        String
+  supporterId     String
+  toolDefinitionId String
+  battleId        String?
+  sourceEventId   String?   @unique // Prevents duplicate grants from same event
+  quantityGranted Int       @default(1)
+  quantityConsumed Int      @default(0)
+  receivedAt      DateTime  @default(now())
+  expiresAt       DateTime  // receivedAt + defaultHours
+  status          String    @default("AVAILABLE") // AVAILABLE, PARTIALLY_USED, FULLY_USED, EXPIRING_SOON, EXPIRED, REVOKED
+  auditReference  String?
+
+  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supporter      Supporter         @relation(fields: [supporterId], references: [id], onDelete: Cascade)
+  toolDefinition ToolDefinition    @relation(fields: [toolDefinitionId], references: [id], onDelete: Cascade)
+  battle         Battle?           @relation(fields: [battleId], references: [id], onDelete: SetNull)
+  consumptions   ToolConsumption[]
+  alerts         InventoryAlert[]
+
+  @@index([tenantId, status, expiresAt])
+}
+
+model ToolConsumption {
+  id          String   @id @default(cuid())
+  tenantId    String
+  toolGrantId String
+  supporterId String
+  quantity    Int      @default(1)
+  consumedAt  DateTime @default(now())
+  battleId    String?
+  notes       String?
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  toolGrant ToolGrant @relation(fields: [toolGrantId], references: [id], onDelete: Cascade)
+  supporter Supporter @relation(fields: [supporterId], references: [id], onDelete: Cascade)
+  battle    Battle?   @relation(fields: [battleId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, consumedAt])
+}
+
+model InventoryAlert {
+  id          String   @id @default(cuid())
+  tenantId    String
+  toolGrantId String
+  alertType   String   // EXPIRING_48H, EXPIRING_24H, EXPIRING_6H, EXPIRED
+  status      String   @default("TRIGGERED") // TRIGGERED, NOTIFIED, DISMISSED
+  triggeredAt DateTime @default(now())
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  toolGrant ToolGrant @relation(fields: [toolGrantId], references: [id], onDelete: Cascade)
+
+  @@unique([toolGrantId, alertType])
+}
+
+// -------------------------------------------------------------
+// 6. Battles Engine (1v1 & 2v2)
+// -------------------------------------------------------------
+
+model Battle {
+  id             String    @id @default(cuid())
+  tenantId       String
+  liveSessionId  String
+  battleType     String    @default("1V1") // 1V1, 2V2
+  status         String    @default("IN_PROGRESS") // IN_PROGRESS, COMPLETED, CANCELLED, DISPUTED
+  startedAt      DateTime  @default(now())
+  endedAt        DateTime?
+  durationSeconds Int?
+  team1Score     Int       @default(0)
+  team2Score     Int       @default(0)
+  winningTeam    Int?      // 1 or 2, null if draw or in progress
+  isManualOverride Boolean @default(false)
+  dataConfidence String    @default("VERIFIED")
+
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  liveSession      LiveSession        @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  participants     BattleParticipant[]
+  scoreEvents      BattleScoreEvent[]
+  toolGrants       ToolGrant[]
+  toolConsumptions ToolConsumption[]
+
+  @@index([tenantId, startedAt])
+}
+
+model BattleParticipant {
+  id             String   @id @default(cuid())
+  battleId       String
+  teamNumber     Int      // 1 or 2
+  platformUserId String
+  username       String
+  displayName    String
+  avatarUrl      String?
+
+  battle Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+
+  @@unique([battleId, platformUserId])
+}
+
+model BattleScoreEvent {
+  id             String   @id @default(cuid())
+  battleId       String
+  supporterId    String
+  teamNumber     Int
+  points         Int
+  giftName       String?
+  timestamp      DateTime @default(now())
+  dataConfidence String   @default("VERIFIED")
+
+  battle    Battle    @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  supporter Supporter @relation(fields: [supporterId], references: [id], onDelete: Cascade)
+
+  @@index([battleId, teamNumber])
+}
+
+// -------------------------------------------------------------
+// 7. Analytics & Best Time Index (Asia/Riyadh)
+// -------------------------------------------------------------
+
+model HourlyAnalytics {
+  id              String   @id @default(cuid())
+  tenantId        String
+  riyadhHour      Int      // 0 - 23 (Asia/Riyadh hour of day)
+  dayOfWeek       Int      // 0 - 6 (Sunday - Saturday)
+  sampleSessions  Int      @default(1)
+  avgDiamonds     Float    @default(0)
+  avgLikes        Float    @default(0)
+  avgComments     Float    @default(0)
+  avgViewers      Float    @default(0)
+  stqiScore       Float    @default(0) // Stream Time Quality Index
+  consistencyScore Float   @default(0) // Variance metric
+  confidenceState String   @default("INSUFFICIENT_DATA") // INSUFFICIENT_DATA, PARTIAL, VERIFIED
+  updatedAt       DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, riyadhHour, dayOfWeek])
+}
+
+// -------------------------------------------------------------
+// 8. Community Champions Engine
+// -------------------------------------------------------------
+
+model ChampionPeriod {
+  id              String   @id @default(cuid())
+  tenantId        String
+  periodType      String   // DAILY, WEEKLY, MONTHLY
+  startDate       DateTime
+  endDate         DateTime
+  formulaVersion  String   @default("v1.0")
+  dataConfidence  String   @default("VERIFIED")
+
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scores ChampionScore[]
+
+  @@unique([tenantId, periodType, startDate])
+}
+
+model ChampionScore {
+  id               String   @id @default(cuid())
+  championPeriodId String
+  supporterId      String
+  category         String   // OVERALL, ENGAGEMENT, CHATTER, PRESENCE, PILLAR
+  rank             Int
+  finalScore       Float
+  presenceScore    Float    @default(0)
+  chatScore        Float    @default(0)
+  likeScore        Float    @default(0)
+  shareScore       Float    @default(0)
+  mentionScore     Float    @default(0)
+  qualificationReason String
+  isEstimated      Boolean  @default(false)
+
+  championPeriod ChampionPeriod @relation(fields: [championPeriodId], references: [id], onDelete: Cascade)
+
+  @@index([championPeriodId, rank])
+}
+
+// -------------------------------------------------------------
+// 9. Enigma (Account Similarity Review)
+// -------------------------------------------------------------
+
+model EnigmaReview {
+  id             String   @id @default(cuid())
+  tenantId       String
+  supporter1Id   String
+  supporter2Id   String
+  matchLevel     String   // STRONG_MATCH, PROBABLE_MATCH, INSUFFICIENT_EVIDENCE
+  confidenceScore Float
+  evidenceJson   String   // JSON containing reasons, timing patterns, SecUID match
+  status         String   @default("PENDING") // PENDING, CONFIRMED, DISMISSED
+  reviewedAt     DateTime?
+  reviewedBy     String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, supporter1Id, supporter2Id])
+}
+
+// -------------------------------------------------------------
+// 10. Reports & Audit Log
+// -------------------------------------------------------------
+
+model AnalyticalReport {
+  id             String   @id @default(cuid())
+  tenantId       String
+  reportType     String   // DAILY_DIGEST, BATTLE_ANALYSIS, INVENTORY_AUDIT, AI_SYNTHESIS
+  periodStart    DateTime
+  periodEnd      DateTime
+  summaryDataJson String   // Hard computed numbers from Database
+  aiInsightsText String?  // Natural language interpretation only
+  createdAt      DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String
+  userId     String?
+  action     String   // MANUAL_BATTLE_CORRECTION, TOOL_REVOCATION, SETTING_UPDATE
+  entityType String
+  entityId   String
+  detailsJson String
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+}
+
+// -------------------------------------------------------------
+// 11. Telegram Alerts & Automated Notification Hub
+// -------------------------------------------------------------
+
+model TelegramConfig {
+  id                    String    @id @default(cuid())
+  tenantId              String    @unique
+  botToken              String?
+  chatId                String?
+  isEnabled             Boolean   @default(false)
+  alertVipEntry         Boolean   @default(true)
+  vipDiamondsThreshold  Int       @default(5000)
+  alertEnigmaUnmasked   Boolean   @default(true)
+  alertDailyChampions   Boolean   @default(true)
+  alertDailyStqi        Boolean   @default(true)
+  alertBattleScores     Boolean   @default(true)
+  lastDailyChampionsAt  DateTime?
+  lastDailyStqiAt       DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model TelegramNotificationLog {
+  id           String   @id @default(cuid())
+  tenantId     String
+  alertType    String   // VIP_ENTRY, ENIGMA_UNMASKED, DAILY_CHAMPIONS, DAILY_STQI, TEST
+  recipient    String
+  messageText  String
+  status       String   // SENT, FAILED
+  errorReason  String?
+  metadataJson String?
+  createdAt    DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+

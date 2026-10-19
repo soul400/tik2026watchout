@@ -35,14 +35,28 @@ export async function POST(request: Request) {
     if (action === "discover_chat_id") {
       const targetUsername = body.targetUsername || "Blacksoul_8";
       const res = await TelegramService.resolveChatIdFromUpdates(tenant.id, targetUsername, botToken);
+      if (res.success && res.chatId) {
+        await TelegramService.updateConfig(tenant.id, { chatId: res.chatId, isEnabled: true });
+      }
       return NextResponse.json({
         success: res.success,
         error: res.error,
         chatId: res.chatId,
         botUsername: res.botUsername,
+        detectedTitle: res.detectedTitle,
         message: res.success
-          ? `تم العثور على المعرف الرقمي لحساب @${targetUsername} (${res.chatId}) وربطه بنجاح!`
+          ? `تم العثور على المعرف (${res.chatId}) لـ "${res.detectedTitle || targetUsername}" وربطه بنجاح!`
           : res.error,
+      });
+    }
+
+    if (action === "discover_recent_chats") {
+      const res = await TelegramService.discoverRecentChats(tenant.id, botToken);
+      return NextResponse.json({
+        success: res.success,
+        error: res.error,
+        botUsername: res.botUsername,
+        chats: res.chats,
       });
     }
 

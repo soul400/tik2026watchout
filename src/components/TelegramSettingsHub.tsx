@@ -69,6 +69,9 @@ export function TelegramSettingsHub() {
   const [showToken, setShowToken] = useState(false);
   const [targetTelegramUsername, setTargetTelegramUsername] = useState("Blacksoul_8");
   const [showGuide, setShowGuide] = useState(true);
+  const [discoveredChats, setDiscoveredChats] = useState<
+    Array<{ id: string; title: string; type: string; username?: string }>
+  >([]);
 
   // Form state
   const [botToken, setBotToken] = useState("");
@@ -80,6 +83,14 @@ export function TelegramSettingsHub() {
   const [alertDailyChampions, setAlertDailyChampions] = useState(true);
   const [alertDailyStqi, setAlertDailyStqi] = useState(true);
   const [alertBattleScores, setAlertBattleScores] = useState(true);
+
+  const appendChatId = (newId: string) => {
+    const currentList = chatId.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+    if (!currentList.includes(newId)) {
+      const updated = currentList.length > 0 ? `${currentList.join(", ")}, ${newId}` : newId;
+      setChatId(updated);
+    }
+  };
 
   // Fetch initial data
   const fetchData = async () => {
@@ -332,21 +343,165 @@ export function TelegramSettingsHub() {
             </p>
           </div>
 
-          {/* Chat ID Input */}
+          {/* Chat ID Input with Multi-Recipient Support */}
           <div className="space-y-1.5">
-            <label className="text-xs font-bold text-secondaryText">
-              معرف المحادثة أو القناة (Chat ID):
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-secondaryText">
+                معرفات المحادثات أو القروبات (Chat IDs):
+              </label>
+              <span className="text-[10px] text-amber-400 font-mono">يدعم عدة معرفات مفصولة بفاصلة</span>
+            </div>
             <input
               type="text"
-              placeholder="-100123456789 أو 987654321"
+              placeholder="1878770526, -100123456789"
               value={chatId}
               onChange={(e) => setChatId(e.target.value)}
               className="w-full bg-elevated border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-secondaryText/50 focus:outline-none focus:border-turquoise font-mono"
             />
-            <p className="text-[10px] text-secondaryText">
-              المعرف الرقمي للمحادثة أو حساب تليقرام.
+            <p className="text-[10px] text-secondaryText leading-relaxed">
+              💡 يمكنك وضع حسابك الخاص وقروب المشرفين معاً مفصولين بفاصلة.
+              <span className="text-amber-300 block font-bold mt-0.5">
+                تنبيه: معرفات المجموعات والقروبات في تليقرام تبدأ دائماً بسالب (مثل <code>-1002345678901</code>).
+              </span>
             </p>
+          </div>
+
+          {/* Group & Moderators Discovery Hub */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-background to-background border border-amber-500/30 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                <Shield className="w-3.5 h-3.5 text-amber-400" />
+                ربط قروب المشرفين في تليقرام (Group Alerts):
+              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 font-bold">
+                مشرفين البث
+              </span>
+            </div>
+
+            <div className="bg-black/30 p-2.5 rounded-xl border border-white/5 space-y-1.5 text-[11px] text-secondaryText">
+              <p className="font-bold text-white">خطوات ربط القروب لتصل التنبيهات لجميع المشرفين:</p>
+              <ol className="list-decimal list-inside space-y-1 leading-relaxed">
+                <li>أضف البوت <strong className="text-turquoise">@mohra_pulse_bot</strong> إلى قروب المشرفين.</li>
+                <li><strong className="text-amber-300">هام جداً:</strong> قم بترقية البوت إلى <strong>مشرف (Admin)</strong> في القروب حتى يسمح له تليقرام بإرسال التنبيهات.</li>
+                <li>أرسل أي رسالة أو اكتب <code className="bg-white/10 px-1 rounded text-white font-mono">/start</code> في القروب.</li>
+                <li>اضغط زر الفحص أدناه ليقوم النظام بالتقاط معرف القروب تلقائياً!</li>
+              </ol>
+            </div>
+
+            <button
+              type="button"
+              onClick={async () => {
+                if (!botToken.trim()) {
+                  setFeedback({ type: "error", message: "يرجى لصق رمز البوت (Bot Token) أولاً." });
+                  return;
+                }
+                setTestingAction("discover_recent_chats");
+                setFeedback(null);
+                try {
+                  const res = await fetch("/api/notifications/telegram/test", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      action: "discover_recent_chats",
+                      botToken: botToken.trim(),
+                    }),
+                  });
+                  const data = await res.json();
+                  if (data.success && data.chats) {
+                    setDiscoveredChats(data.chats);
+                    if (data.chats.length === 0) {
+                      setFeedback({
+                        type: "error",
+                        message: "لم يتم رصد أي رسالة جديدة من القروب بعد. تأكد من رفع البوت مشرفاً (Admin) في القروب وإرسال رسالة تجريبية داخله مثل /start ثم إعادة المحاولة.",
+                      });
+                    } else {
+                      setFeedback({
+                        type: "success",
+                        message: `تم العثور على ${data.chats.length} محادثة/قروب نشط! اضغط على "إضافة للروم" لربط القروب فوراً.`,
+                      });
+                    }
+                  } else {
+                    setFeedback({ type: "error", message: data.error || "تعذر فحص تحديثات تليقرام." });
+                  }
+                } catch {
+                  setFeedback({ type: "error", message: "حدث خطأ أثناء فحص محادثات البوت." });
+                } finally {
+                  setTestingAction(null);
+                }
+              }}
+              disabled={testingAction === "discover_recent_chats" || !botToken.trim()}
+              className="w-full py-2.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-40 shadow-sm"
+            >
+              {testingAction === "discover_recent_chats" ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>جاري فحص المجموعات والرسائل في البوت...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>⚡ فحص واكتشاف قروبات المشرفين النشطة</span>
+                </>
+              )}
+            </button>
+
+            {/* Discovered Chats List */}
+            {discoveredChats.length > 0 && (
+              <div className="space-y-2 pt-2 border-t border-white/5">
+                <span className="text-[11px] text-white font-bold block">المحادثات والمجموعات المرصودة:</span>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {discoveredChats.map((c) => {
+                    const isGroup = c.type === "group" || c.type === "supergroup";
+                    const isAlreadyAdded = chatId.includes(c.id);
+
+                    return (
+                      <div
+                        key={c.id}
+                        className="p-2.5 rounded-xl bg-surface border border-white/10 flex items-center justify-between gap-2"
+                      >
+                        <div className="truncate">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs">{isGroup ? "👥" : "👤"}</span>
+                            <span className="text-xs font-bold text-white truncate">{c.title}</span>
+                            <span className="text-[9px] px-1.5 py-0.2 rounded font-mono bg-white/5 text-secondaryText border border-white/5">
+                              {c.type}
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-mono text-secondaryText block mt-0.5">
+                            ID: <code className="text-gold font-bold">{c.id}</code>
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          {isAlreadyAdded ? (
+                            <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1 px-2 py-1 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
+                              <Check className="w-3 h-3" /> مضاف
+                            </span>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => appendChatId(c.id)}
+                                className="px-2 py-1 rounded-lg bg-turquoise/20 hover:bg-turquoise/30 border border-turquoise/40 text-turquoise text-[10px] font-bold transition-all"
+                              >
+                                + إضافة
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setChatId(c.id)}
+                                className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-secondaryText hover:text-white text-[10px] font-bold transition-all"
+                              >
+                                تعيين كوحيد
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Quick Connect for @Blacksoul_8 */}
@@ -354,7 +509,7 @@ export function TelegramSettingsHub() {
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-white flex items-center gap-1.5">
                 <Send className="w-3.5 h-3.5 text-turquoise" />
-                الحساب المستهدف للربط:
+                الحساب المستهدف للربط الخاص:
               </span>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-turquoise/15 text-turquoise font-bold">
                 ربط تلقائي ذكي
@@ -407,7 +562,7 @@ export function TelegramSettingsHub() {
                   });
                   const data = await res.json();
                   if (data.success && data.chatId) {
-                    setChatId(data.chatId);
+                    appendChatId(data.chatId);
                     setIsEnabled(true);
                     setFeedback({
                       type: "success",

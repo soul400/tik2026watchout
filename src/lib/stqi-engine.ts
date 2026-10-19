@@ -26,6 +26,19 @@ export interface BestStreamWindow {
   summaryArabic: string;
 }
 
+export interface TopSupportWindow {
+  rank: number; // 1, 2, 3
+  hour: number;
+  formattedHourArabic: string;
+  avgDiamonds: number;
+  avgDiamondsFormatted: string;
+  stqiScore: number;
+  sampleSessions: number;
+  confidenceState: "VERIFIED" | "PARTIAL" | "INSUFFICIENT_DATA";
+  badgeArabic: string;
+  tacticalTip: string;
+}
+
 export interface SmartRecommendation {
   id: string;
   category: "TIMING" | "BATTLES" | "MIDNIGHT" | "FATIGUE" | "POWER_UPS";
@@ -55,6 +68,7 @@ export interface SmartAnalyticsOverview {
   peakChatRate: number;
   totalAnalyzedHours: number;
   recommendations: SmartRecommendation[];
+  topSupportWindows?: TopSupportWindow[];
 }
 
 export class STQIEngine {
@@ -340,6 +354,87 @@ export class STQIEngine {
   }
 
   /**
+   * Retrieves the top N broadcast periods in terms of financial support (diamonds).
+   */
+  static async getTopSupportWindows(tenantId: string, limit: number = 3): Promise<TopSupportWindow[]> {
+    let records = await prisma.hourlyAnalytics.findMany({
+      where: { tenantId, dayOfWeek: -1 },
+      orderBy: { avgDiamonds: "desc" },
+      take: limit,
+    });
+
+    if (records.length === 0) {
+      const computed = await this.computeHourlyMetrics(tenantId);
+      const allDays = computed
+        .filter((c) => c.dayOfWeek === -1 && c.avgDiamonds > 0)
+        .sort((a, b) => b.avgDiamonds - a.avgDiamonds)
+        .slice(0, limit);
+
+      return allDays.map((c, index) => {
+        const rank = index + 1;
+        const formattedHourArabic = this.formatHourWindow(c.riyadhHour);
+        const avgDiamondsFormatted = `${c.avgDiamonds.toLocaleString("ar-SA")} 💎`;
+        const badgeArabic =
+          rank === 1
+            ? "🥇 المركز الأول (الذروة الماسية القصوى)"
+            : rank === 2
+            ? "🥈 المركز الثاني (دعم مالي متقدم)"
+            : "🥉 المركز الثالث (دعم استراتيجي قوي)";
+        const tacticalTip =
+          rank === 1
+            ? "النافذة الذهبية للنزالات الرسمية الكبرى واستنزاف كبار الداعمين"
+            : rank === 2
+            ? "فترة مثالية لجولات التعزيز والضغط التكتيكي وفتح الصناديق"
+            : "فترة ممتازة للإحماء التنافسي وتثبيت صدارة الرانك اليومي";
+
+        return {
+          rank,
+          hour: c.riyadhHour,
+          formattedHourArabic,
+          avgDiamonds: c.avgDiamonds,
+          avgDiamondsFormatted,
+          stqiScore: c.stqiScore,
+          sampleSessions: c.sampleSessions,
+          confidenceState: c.confidenceState,
+          badgeArabic,
+          tacticalTip,
+        };
+      });
+    }
+
+    return records.map((r, index) => {
+      const rank = index + 1;
+      const formattedHourArabic = this.formatHourWindow(r.riyadhHour);
+      const avgDiamondsFormatted = `${r.avgDiamonds.toLocaleString("ar-SA")} 💎`;
+      const badgeArabic =
+        rank === 1
+          ? "🥇 المركز الأول (الذروة الماسية القصوى)"
+          : rank === 2
+          ? "🥈 المركز الثاني (دعم مالي متقدم)"
+          : "🥉 المركز الثالث (دعم استراتيجي قوي)";
+      const tacticalTip =
+        rank === 1
+          ? "النافذة الذهبية للنزالات الرسمية الكبرى واستنزاف كبار الداعمين"
+          : rank === 2
+          ? "فترة مثالية لجولات التعزيز والضغط التكتيكي وفتح الصناديق"
+          : "فترة ممتازة للإحماء التنافسي وتثبيت صدارة الرانك اليومي";
+
+      return {
+        rank,
+        hour: r.riyadhHour,
+        formattedHourArabic,
+        avgDiamonds: r.avgDiamonds,
+        avgDiamondsFormatted,
+        stqiScore: r.stqiScore,
+        sampleSessions: r.sampleSessions,
+        confidenceState: r.confidenceState as any,
+        badgeArabic,
+        tacticalTip,
+      };
+    });
+  }
+
+  /**
    * Generates comprehensive AI/Algorithmic intelligence, tactical recommendations, and dashboard KPIs.
    */
   static async getSmartAnalyticsOverview(tenantId: string): Promise<SmartAnalyticsOverview> {
@@ -505,6 +600,32 @@ export class STQIEngine {
       },
     ];
 
+    const topSupportWindows: TopSupportWindow[] = sortedByDiamonds.slice(0, 3).map((r, index) => {
+      const rank = index + 1;
+      return {
+        rank,
+        hour: r.riyadhHour,
+        formattedHourArabic: this.formatHourWindow(r.riyadhHour),
+        avgDiamonds: r.avgDiamonds,
+        avgDiamondsFormatted: `${r.avgDiamonds.toLocaleString("ar-SA")} 💎`,
+        stqiScore: r.stqiScore,
+        sampleSessions: r.sampleSessions,
+        confidenceState: r.confidenceState as any,
+        badgeArabic:
+          rank === 1
+            ? "🥇 المركز الأول (الذروة الماسية القصوى)"
+            : rank === 2
+            ? "🥈 المركز الثاني (دعم مالي متقدم)"
+            : "🥉 المركز الثالث (دعم استراتيجي قوي)",
+        tacticalTip:
+          rank === 1
+            ? "النافذة الذهبية للنزالات الرسمية الكبرى واستنزاف كبار الداعمين"
+            : rank === 2
+            ? "فترة مثالية لجولات التعزيز والضغط التكتيكي وفتح الصناديق"
+            : "فترة ممتازة للإحماء التنافسي وتثبيت صدارة الرانك اليومي",
+      };
+    });
+
     return {
       overallEfficiencyScore: avgStqiAll,
       goldenLaunchWindow,
@@ -515,6 +636,7 @@ export class STQIEngine {
       peakChatRate: topChat.avgComments,
       totalAnalyzedHours: records.length,
       recommendations,
+      topSupportWindows,
     };
   }
 }

@@ -5,18 +5,26 @@ import { BattleEngine } from "../src/lib/battle-engine";
 import { BattleScoreResolver } from "../src/lib/battle-score-resolver";
 
 describe("Cross-Section Integrity & Regression Prevention Suite", () => {
-  let tenantId: string;
+  const TEST_TENANT = "test-cross-section-tenant";
+  let tenantId = TEST_TENANT;
   let testSupporter: any;
   let testSession: any;
   let testBattle: any;
 
   beforeEach(async () => {
-    // 1. Fetch mohra-live tenant
-    const tenant = await prisma.tenant.findUnique({ where: { slug: "mohra-live" } });
-    if (!tenant) {
-      throw new Error("Tenant mohra-live not found in database.");
-    }
+    // 1. Fetch or create isolated test tenant
+    const tenant = await prisma.tenant.upsert({
+      where: { id: TEST_TENANT },
+      update: {},
+      create: {
+        id: TEST_TENANT,
+        slug: "test-cross-section-tenant",
+        name: "Test Cross-Section Tenant",
+      },
+    });
     tenantId = tenant.id;
+
+    await SmartInventoryService.ensureCanonicalDefinitions(tenantId);
 
     // 2. Fetch or create streamer account
     let streamer = await prisma.streamerAccount.findFirst({ where: { tenantId } });
@@ -24,9 +32,9 @@ describe("Cross-Section Integrity & Regression Prevention Suite", () => {
       streamer = await prisma.streamerAccount.create({
         data: {
           tenantId,
-          platformUserId: "mohra_official",
-          username: "mohra.2000",
-          displayName: "مهـرة",
+          platformUserId: "test_mohra_official",
+          username: "test.mohra.2000",
+          displayName: "مهـرة تجريبي",
         },
       });
     }
@@ -261,48 +269,16 @@ describe("Cross-Section Integrity & Regression Prevention Suite", () => {
   });
 
   afterAll(async () => {
-    // Purge any test-generated fixtures
-    await prisma.toolConsumption.deleteMany({
-      where: {
-        OR: [
-          { supporter: { platformUserId: { startsWith: "supporter_cross_" } } },
-          { notes: { contains: "Tactical Fog Triggered in PK Round" } },
-        ],
-      },
-    });
-
-    await prisma.toolGrant.deleteMany({
-      where: {
-        OR: [
-          { supporter: { platformUserId: { startsWith: "supporter_cross_" } } },
-          { sourceEventId: { startsWith: "evt_gift_tactical_" } },
-          { sourceEventId: { startsWith: "grant_fog_" } },
-          { sourceEventId: { startsWith: "notice_tiktok_" } },
-          { sourceEventId: { startsWith: "expired_grant_" } },
-        ],
-      },
-    });
-
-    await prisma.battleParticipant.deleteMany({
-      where: {
-        platformUserId: "opponent_user_cross",
-      },
-    });
-
-    await prisma.battle.deleteMany({
-      where: {
-        participants: { some: { platformUserId: "opponent_user_cross" } },
-      },
-    });
-
-    await prisma.supporter.deleteMany({
-      where: {
-        OR: [
-          { platformUserId: { startsWith: "supporter_cross_" } },
-          { platformUserId: { startsWith: "agg_" } },
-          { displayName: { contains: "التكامل" } },
-        ],
-      },
-    });
+    // Purge test tenant completely
+    await prisma.toolLedgerMovement.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.toolConsumption.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.toolGrant.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.toolDefinition.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.battleParticipant.deleteMany({ where: { battle: { tenantId: TEST_TENANT } } });
+    await prisma.battle.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.supporter.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.liveSession.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.streamerAccount.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.tenant.deleteMany({ where: { id: TEST_TENANT } });
   });
 });

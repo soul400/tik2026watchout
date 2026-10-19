@@ -34,6 +34,11 @@ export function LiveStreamSupportersTable({ initialData }: LiveStreamSupportersT
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
   const [isAutoRefreshEnabled, setIsAutoRefreshEnabled] = useState(true);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Fetch updated data from API
   const refreshData = async (showLoading: boolean = false) => {
@@ -79,6 +84,7 @@ export function LiveStreamSupportersTable({ initialData }: LiveStreamSupportersT
 
   // Format relative time for gifts
   const formatGiftTime = (isoString: string) => {
+    if (!isMounted) return "—";
     try {
       const diffMs = Date.now() - new Date(isoString).getTime();
       const diffSec = Math.floor(diffMs / 1000);
@@ -372,7 +378,7 @@ export function LiveStreamSupportersTable({ initialData }: LiveStreamSupportersT
                           <Gift className="w-3 h-3 text-turquoise shrink-0" />
                           <span className="truncate">{sup.latestGiftName || "هدية"}</span>
                         </span>
-                        <span className="text-[10px] text-secondaryText/80 font-mono">
+                        <span className="text-[10px] text-secondaryText/80 font-mono" suppressHydrationWarning>
                           {formatGiftTime(sup.latestGiftTime)}
                         </span>
                       </div>
@@ -409,7 +415,9 @@ export function LiveStreamSupportersTable({ initialData }: LiveStreamSupportersT
           <span>مرصود ومطابق 100% لسجلات هدايا جلسة البث الحالية</span>
         </div>
         <div>
-          <span>آخر مزامنة: {lastRefreshedAt.toLocaleTimeString("ar-SA")}</span>
+          <span suppressHydrationWarning>
+            آخر مزامنة: {isMounted ? lastRefreshedAt.toLocaleTimeString("ar-SA") : "جاري المزامنة..."}
+          </span>
         </div>
       </div>
     </div>

@@ -6,6 +6,7 @@ import { BattleScoreResolver } from "../lib/battle-score-resolver";
 import { STQIEngine } from "../lib/stqi-engine";
 import { EnigmaEngine } from "../lib/enigma-engine";
 import { TelegramService } from "../lib/telegram-service";
+import { StreamHealthService } from "../lib/stream-health";
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -57,6 +58,14 @@ async function runWorker() {
     console.warn(`[Worker] ⚠️ Enigma initial sync notice: ${err?.message || err}`);
   }
 
+  // Synchronize Tactical Inventory Expirations on worker startup
+  try {
+    const sweepRes = await SmartInventoryService.sweepExpiredGrants(tenant.id);
+    console.log(`[Worker] 🛡️ Tactical Inventory Sweep complete (${sweepRes.expiredCount} expired, ${sweepRes.movementsLogged} movements, ${sweepRes.expiringSoonCount} expiring soon).`);
+  } catch (err: any) {
+    console.warn(`[Worker] ⚠️ Tactical inventory sweep notice: ${err?.message || err}`);
+  }
+
   const adapter = new RealTikTokConnectorAdapter({
     enableExtendedGiftInfo: false,
   });
@@ -67,6 +76,7 @@ async function runWorker() {
   adapter.on("connected", async (state: any) => {
     const roomId = state?.roomId || "Active";
     console.log(`\n[Worker] 🟢 CONNECTED TO LIVE STREAM! Room ID: ${roomId}`);
+    StreamHealthService.setConnectionState("CONNECTED");
 
     const liveSession = await prisma.liveSession.create({
       data: {
@@ -84,6 +94,7 @@ async function runWorker() {
   });
 
   adapter.on("gift", (data: any) => {
+    StreamHealthService.recordEventReceived(0, true);
     const actor = data.user?.displayId || data.uniqueId || data.user?.nickname || "supporter";
     const giftName = data.gift?.name || data.giftName || "Gift";
     const repeatCount = Number(data.repeatCount || 1);
@@ -92,31 +103,37 @@ async function runWorker() {
   });
 
   adapter.on("chat", (data: any) => {
+    StreamHealthService.recordEventReceived(0, true);
     const actor = data.user?.displayId || data.uniqueId || data.user?.nickname || "user";
     const comment = data.content || data.comment || "";
     console.log(`[LIVE CHAT] 💬 @${actor}: ${comment}`);
   });
 
   adapter.on("like", (data: any) => {
+    StreamHealthService.recordEventReceived(0, true);
     const actor = data.user?.displayId || data.uniqueId || data.user?.nickname || "user";
     const count = Number(data.likeCount || data.count || 1);
     console.log(`[LIVE LIKE] ❤️ @${actor} sent ${count} likes`);
   });
 
   adapter.on("member", (data: any) => {
+    StreamHealthService.recordEventReceived(0, true);
     const actor = data.user?.displayId || data.uniqueId || data.user?.nickname || "viewer";
     console.log(`[LIVE VIEWER JOIN] 🚪 @${actor} joined the live stream`);
   });
 
   adapter.on("linkMicBattle", (data: any) => {
+    StreamHealthService.recordEventReceived(0, true);
     console.log(`[LIVE BATTLE] ⚔️ Battle Event: ID ${data.battleId || "round"}`);
   });
 
   adapter.on("linkMicArmies", (data: any) => {
+    StreamHealthService.recordEventReceived(0, true);
     console.log(`[LIVE ARMIES] 🛡️ Battle Armies Updated`);
   });
 
   adapter.on("linkMicBattleItemCard", (data: any) => {
+    StreamHealthService.recordEventReceived(0, true);
     // Log the raw payload so we know what TikTok actually sends
     const topKeys = Object.keys(data || {}).filter((k) => !['common'].includes(k));
     const awardedCount = data?.awardCardNotice?.awardedUsers?.length ?? 0;
@@ -128,6 +145,7 @@ async function runWorker() {
   });
 
   adapter.on("linkMicBattleTask", (data: any) => {
+    StreamHealthService.recordEventReceived(0, true);
     const topKeys = Object.keys(data || {}).filter((k) => !['common'].includes(k));
     console.log(
       `[LIVE BATTLE TASK] 📋 BattleTask event | msgType=${data?.msgType} | topKeys=[${topKeys.join(',')}]`
@@ -136,6 +154,7 @@ async function runWorker() {
 
   adapter.on("streamEnd", async () => {
     console.log("\n[Worker] 🔴 Stream ended by host.");
+    StreamHealthService.setConnectionState("DISCONNECTED");
     if (activeSessionId) {
       await prisma.liveSession.update({
         where: { id: activeSessionId },
@@ -167,10 +186,13 @@ async function runWorker() {
 
   adapter.on("disconnected", () => {
     console.log("[Worker] 🔌 Connection closed.");
+    StreamHealthService.setConnectionState("DISCONNECTED");
   });
 
   adapter.on("error", (err: any) => {
-    console.warn(`[Worker] Connection notice: ${err?.message || err}`);
+    const msg = err?.message || String(err);
+    console.warn(`[Worker] Connection notice: ${msg}`);
+    StreamHealthService.recordError(msg);
   });
 
   // Main supervision loop
@@ -178,6 +200,7 @@ async function runWorker() {
   let lastReconcileTime = 0;
   let lastStqiSyncTime = Date.now();
   let lastTelegramDailyCheck = 0;
+  let lastHealthSnapshotTime = 0;
 
   const checkTelegramDailySchedule = async () => {
     if (Date.now() - lastTelegramDailyCheck < 5 * 60 * 1000) return;
@@ -209,6 +232,8 @@ async function runWorker() {
 
   while (true) {
     try {
+      StreamHealthService.recordHeartbeat();
+
       // Reconcile tool expirations periodically (every 60s)
       if (Date.now() - lastReconcileTime > 60000) {
         lastReconcileTime = Date.now();
@@ -219,6 +244,14 @@ async function runWorker() {
       if (Date.now() - lastStqiSyncTime > 10 * 60 * 1000) {
         lastStqiSyncTime = Date.now();
         await STQIEngine.syncHourlyAnalytics(tenant.id).catch(() => {});
+      }
+
+      // Record worker heartbeat and persist periodic snapshot every 30 seconds
+      StreamHealthService.recordHeartbeat();
+      if (Date.now() - lastHealthSnapshotTime > 30 * 1000) {
+        lastHealthSnapshotTime = Date.now();
+        await StreamHealthService.persistSnapshot(tenant.id).catch(() => {});
+        await SmartInventoryService.reconcileInventory(tenant.id).catch(() => {});
       }
 
       // Check daily automated Telegram alerts
@@ -232,6 +265,8 @@ async function runWorker() {
         if (connected) {
           // Wait while connected
           while (adapter.isConnected()) {
+            StreamHealthService.recordHeartbeat();
+
             if (Date.now() - lastReconcileTime > 60000) {
               lastReconcileTime = Date.now();
               await SmartInventoryService.reconcileExpirations(tenant.id).catch(() => {});
@@ -239,6 +274,11 @@ async function runWorker() {
             if (Date.now() - lastStqiSyncTime > 10 * 60 * 1000) {
               lastStqiSyncTime = Date.now();
               await STQIEngine.syncHourlyAnalytics(tenant.id).catch(() => {});
+            }
+            if (Date.now() - lastHealthSnapshotTime > 5 * 60 * 1000) {
+              lastHealthSnapshotTime = Date.now();
+              await StreamHealthService.persistSnapshot(tenant.id).catch(() => {});
+              await SmartInventoryService.reconcileInventory(tenant.id).catch(() => {});
             }
             await sleep(3000);
           }

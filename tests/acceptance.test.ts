@@ -5,13 +5,36 @@ import { BattleEngine } from "../src/lib/battle-engine";
 import { ChampionsEngine } from "../src/lib/champions-engine";
 
 describe("LIVEPULSE INTELLIGENCE — Acceptance Test Suite", () => {
-  let tenantId: string;
+  const TEST_TENANT = "test-acceptance-tenant";
+  let tenantId = TEST_TENANT;
   let supporterId: string;
 
   beforeEach(async () => {
-    // Retrieve seeded tenant and supporter
-    const tenant = await prisma.tenant.findUnique({ where: { slug: "mohra-live" } });
-    tenantId = tenant!.id;
+    // Isolated acceptance test tenant
+    const tenant = await prisma.tenant.upsert({
+      where: { id: TEST_TENANT },
+      update: {},
+      create: {
+        id: TEST_TENANT,
+        slug: "test-acceptance-tenant",
+        name: "Test Acceptance Tenant",
+      },
+    });
+    tenantId = tenant.id;
+
+    await SmartInventoryService.ensureCanonicalDefinitions(tenantId);
+
+    let streamer = await prisma.streamerAccount.findFirst({ where: { tenantId } });
+    if (!streamer) {
+      await prisma.streamerAccount.create({
+        data: {
+          tenantId,
+          platformUserId: "test_acceptance_streamer",
+          username: "test.streamer",
+          displayName: "مضيف تجريبي",
+        },
+      });
+    }
 
     let supporter = await prisma.supporter.findFirst({ where: { tenantId } });
     if (!supporter) {
@@ -209,44 +232,17 @@ describe("LIVEPULSE INTELLIGENCE — Acceptance Test Suite", () => {
   });
 
   afterAll(async () => {
-    // Clean up test grants created by tests
-    await prisma.toolConsumption.deleteMany({
-      where: { toolGrant: { sourceEventId: { contains: "test_" } } },
-    });
-    await prisma.toolGrant.deleteMany({
-      where: {
-        OR: [
-          { sourceEventId: { contains: "test_" } },
-          { sourceEventId: { contains: "idempotent_" } },
-        ],
-      },
-    });
-    await prisma.battleScoreEvent.deleteMany({
-      where: { supporter: { platformUserId: { contains: "test" } } },
-    });
-    await prisma.battleParticipant.deleteMany({
-      where: {
-        OR: [
-          { username: "challenger_boss" },
-          { platformUserId: { contains: "opponent_user" } },
-        ],
-      },
-    });
-    await prisma.battle.deleteMany({
-      where: {
-        OR: [
-          { liveSession: { streamerAccount: { username: "test" } } },
-          { participants: { none: {} } },
-        ],
-      },
-    });
-    await prisma.supporter.deleteMany({
-      where: {
-        OR: [
-          { platformUserId: { contains: "test" } },
-          { username: { contains: "test" } },
-        ],
-      },
-    });
+    // Purge test tenant completely
+    await prisma.toolLedgerMovement.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.toolConsumption.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.toolGrant.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.toolDefinition.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.battleScoreEvent.deleteMany({ where: { battle: { tenantId: TEST_TENANT } } });
+    await prisma.battleParticipant.deleteMany({ where: { battle: { tenantId: TEST_TENANT } } });
+    await prisma.battle.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.supporter.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.liveSession.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.streamerAccount.deleteMany({ where: { tenantId: TEST_TENANT } });
+    await prisma.tenant.deleteMany({ where: { id: TEST_TENANT } });
   });
 });

@@ -29,18 +29,22 @@ export default async function ChampionsPage() {
   });
   const isCurrentlyLive = !!activeLiveSession;
 
-  const now = new Date();
-  const pastSevenDays = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const presetPeriods = ChampionsEngine.getPresetPeriods();
+  const initialPeriod = presetPeriods.weekly[0];
 
   const [champions, overview] = await Promise.all([
     ChampionsEngine.computePeriodChampions({
       tenantId,
       periodType: "WEEKLY",
-      startDate: pastSevenDays,
-      endDate: now,
+      startDate: new Date(initialPeriod.startDate),
+      endDate: new Date(initialPeriod.endDate),
       limit: 50,
     }),
-    ChampionsEngine.getChampionsOverview(tenantId),
+    ChampionsEngine.getChampionsOverview({
+      tenantId,
+      startDate: new Date(initialPeriod.startDate),
+      endDate: new Date(initialPeriod.endDate),
+    }),
   ]);
 
   return (
@@ -115,7 +119,12 @@ export default async function ChampionsPage() {
       </div>
 
       {/* 4. Champions Interactive Client (Dashboard, Podium, AI Analysis, Recommendations & Leaderboard) */}
-      <ChampionsClient initialChampions={champions} initialOverview={overview} />
+      <ChampionsClient
+        initialChampions={champions}
+        initialOverview={overview}
+        initialPeriod={initialPeriod}
+        presetPeriods={presetPeriods}
+      />
     </div>
   );
 }

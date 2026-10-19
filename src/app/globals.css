@@ -166,3 +166,78 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #2b3d63;
 }
+
+/* ==========================================================================
+   Print Document Media Rules (Zero UI pollution: PDF contains only the document)
+   ========================================================================== */
+@page {
+  size: A4 portrait;
+  margin: 12mm 10mm 12mm 10mm;
+}
+
+@media print {
+  /* Hide all interactive bars, buttons, sidebars, headers, floating hints */
+  .no-print,
+  aside,
+  header,
+  nav,
+  button,
+  .print-hidden {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Reset document body */
+  html,
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 11pt !important;
+    line-height: 1.4 !important;
+    overflow: visible !important;
+    height: auto !important;
+    min-height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Target PDF Canvas */
+  .pdf-report-canvas {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+  }
+
+  /* Page Break Rules */
+  .page-break-inside-avoid {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  table {
+    page-break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tfoot {
+    display: table-footer-group;
+  }
+}

@@ -5,6 +5,9 @@ dist/
 .env.local
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
+*.db.bak*
 *.log
 *.tsbuildinfo
 scratch/

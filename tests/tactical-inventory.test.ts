@@ -1335,6 +1335,77 @@ describe("Tactical Inventory & Multi-Tool Tracking Tests", () => {
       expect(r3Hammer).toBeDefined();
       expect(r3Hammer?.quantityGranted).toBe(1);
     });
+
+    it("ATOM 1: guarantees transactional atomicity on grantTool — rolls back grant if ledger write fails", async () => {
+      const supporter = await prisma.supporter.findUnique({
+        where: { tenantId_platformUserId: { tenantId: TEST_TENANT_ID, platformUserId: TEST_SUPPORTER_UID } },
+      });
+      expect(supporter).toBeDefined();
+
+      const sourceEventId = `evt_atom_rollback_${Date.now()}`;
+
+      // Execute grant with simulated ledger failure
+      await expect(
+        SmartInventoryService.grantTool({
+          tenantId: TEST_TENANT_ID,
+          supporterId: supporter!.id,
+          toolKey: "SHIELD_DEFENSE",
+          quantity: 3,
+          sourceEventId,
+          simulateLedgerFailure: true,
+        })
+      ).rejects.toThrow("SIMULATED_LEDGER_MUTATION_FAILURE");
+
+      // Verify that ToolGrant was NOT committed in the database
+      const grantInDb = await prisma.toolGrant.findUnique({
+        where: { sourceEventId },
+      });
+      expect(grantInDb).toBeNull();
+
+      // Verify that no orphaned ledger movement was created
+      const movementInDb = await prisma.toolLedgerMovement.findFirst({
+        where: { sourceEventId },
+      });
+      expect(movementInDb).toBeNull();
+    });
+
+    it("ATOM 2: successfully commits both ToolGrant and ToolLedgerMovement in a single transaction", async () => {
+      const supporter = await prisma.supporter.findUnique({
+        where: { tenantId_platformUserId: { tenantId: TEST_TENANT_ID, platformUserId: TEST_SUPPORTER_UID } },
+      });
+      expect(supporter).toBeDefined();
+
+      const sourceEventId = `evt_atom_success_${Date.now()}`;
+
+      const res = await SmartInventoryService.grantTool({
+        tenantId: TEST_TENANT_ID,
+        supporterId: supporter!.id,
+        toolKey: "SHIELD_DEFENSE",
+        quantity: 2,
+        sourceEventId,
+        auditReference: "TEST_ATOMIC_COMMIT",
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.grant).toBeDefined();
+
+      // Verify ToolGrant exists
+      const grantInDb = await prisma.toolGrant.findUnique({
+        where: { sourceEventId },
+      });
+      expect(grantInDb).not.toBeNull();
+      expect(grantInDb?.quantityGranted).toBe(2);
+
+      // Verify ToolLedgerMovement exists with exact matching grant ID and quantity
+      const movementInDb = await prisma.toolLedgerMovement.findFirst({
+        where: { sourceEventId },
+      });
+      expect(movementInDb).not.toBeNull();
+      expect(movementInDb?.toolGrantId).toBe(grantInDb!.id);
+      expect(movementInDb?.movementType).toBe("ACQUISITION");
+      expect(movementInDb?.quantity).toBe(2);
+      expect(movementInDb?.resultingBalance).toBe(2);
+    });
   });
 });
 

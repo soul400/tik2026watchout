@@ -20,6 +20,13 @@ export interface ToolGrantParams {
   battleId?: string;
   sourceEventId: string;
   auditReference?: string;
+  simulateLedgerFailure?: boolean;
+}
+
+export interface ToolGrantResult {
+  success: boolean;
+  grant?: any;
+  reason?: string;
 }
 
 export interface ToolConsumeParams {
@@ -126,11 +133,14 @@ export class SmartInventoryService {
   }
 
   /**
-   * Grants a tool to a supporter with strict 5-day expiration (120 hours) and idempotency.
-   * Unknown/unsupported tools are rejected and cannot modify tool balances.
+   * Grants tools atomically to a supporter's tactical inventory.
+   * - Enforces transactional atomicity across ToolGrant and ToolLedgerMovement.
+   * - Prevents duplicate grants from the same event notice (sourceEventId uniqueness).
+   * - Resolves canonical tool definitions and sets 5-day (120h) expiration in UTC.
+   * - Unknown/unsupported tools are rejected and cannot modify tool balances.
    */
-  static async grantTool(params: ToolGrantParams) {
-    const { tenantId, supporterId, toolKey, quantity, battleId, sourceEventId, auditReference } = params;
+  static async grantTool(params: ToolGrantParams): Promise<ToolGrantResult> {
+    const { tenantId, supporterId, toolKey, quantity, battleId, sourceEventId, auditReference, simulateLedgerFailure } = params;
 
     // 0. Strict tenant validation: Reject empty or invalid tenant IDs
     if (!tenantId || typeof tenantId !== "string" || tenantId.trim() === "") {
@@ -151,20 +161,7 @@ export class SmartInventoryService {
       return { success: false, reason: "INVALID_TOOL_KEY" };
     }
 
-    // 2. Prevent duplicate grants from the same source event
-    const existing = await prisma.toolGrant.findUnique({
-      where: { sourceEventId },
-      include: {
-        toolDefinition: true,
-        supporter: true,
-      },
-    });
-
-    if (existing) {
-      return { success: false, reason: "ALREADY_GRANTED", grant: existing };
-    }
-
-    // 3. Fetch or provision Tool Definition
+    // 2. Fetch or provision Tool Definition
     let toolDef = await prisma.toolDefinition.findUnique({
       where: {
         tenantId_key: {
@@ -189,55 +186,102 @@ export class SmartInventoryService {
       });
     }
 
-    // 4. Compute 5-day expiration server-side in UTC
+    // 3. Compute 5-day expiration server-side in UTC
     const receivedAt = new Date();
     const expiresAt = new Date(receivedAt.getTime() + (toolDef.defaultHours || 120) * 60 * 60 * 1000);
 
-    const grant = await prisma.toolGrant.create({
-      data: {
-        tenantId,
-        supporterId,
-        toolDefinitionId: toolDef.id,
-        battleId,
-        sourceEventId,
-        quantityGranted: quantity,
-        quantityConsumed: 0,
-        receivedAt,
-        expiresAt,
-        status: "AVAILABLE",
-        auditReference: auditReference || `Auto-granted at ${receivedAt.toISOString()}`,
-      },
-      include: {
-        toolDefinition: true,
-        supporter: true,
-      },
-    });
-
-    // Record ACQUISITION in 2.0 Movement Ledger
+    // 4. Atomically execute grant and ledger movement in a single transaction
     try {
-      await prisma.toolLedgerMovement.create({
-        data: {
-          tenantId,
-          toolGrantId: grant.id,
-          supporterId,
-          toolKey,
-          movementType: "ACQUISITION",
-          quantity,
-          previousBalance: 0,
-          resultingBalance: quantity,
-          sourceEventId,
-          reason: auditReference || "TACTICAL_CARD_AWARD",
-          metadataJson: JSON.stringify({
-            expiresAt: expiresAt.toISOString(),
-            battleId,
-          }),
-        },
-      });
-    } catch (e: any) {
-      console.warn(`[INVENTORY_LEDGER] Acquisition ledger notice: ${e?.message}`);
-    }
+      return await prisma.$transaction(async (tx) => {
+        // Prevent duplicate grants from the same source event within transaction
+        if (sourceEventId) {
+          const existing = await tx.toolGrant.findUnique({
+            where: { sourceEventId },
+            include: {
+              toolDefinition: true,
+              supporter: true,
+            },
+          });
 
-    return { success: true, grant };
+          if (existing) {
+            return { success: false, reason: "ALREADY_GRANTED", grant: existing };
+          }
+        }
+
+        const grant = await tx.toolGrant.create({
+          data: {
+            tenantId,
+            supporterId,
+            toolDefinitionId: toolDef!.id,
+            battleId,
+            sourceEventId,
+            quantityGranted: quantity,
+            quantityConsumed: 0,
+            receivedAt,
+            expiresAt,
+            status: "AVAILABLE",
+            auditReference: auditReference || `Auto-granted at ${receivedAt.toISOString()}`,
+          },
+          include: {
+            toolDefinition: true,
+            supporter: true,
+          },
+        });
+
+        // Induced rollback hook for testing transaction atomicity
+        if (simulateLedgerFailure) {
+          throw new Error("SIMULATED_LEDGER_MUTATION_FAILURE");
+        }
+
+        // Record ACQUISITION in 2.0 Movement Ledger inside the exact same transaction
+        await tx.toolLedgerMovement.create({
+          data: {
+            tenantId,
+            toolGrantId: grant.id,
+            supporterId,
+            toolKey,
+            movementType: "ACQUISITION",
+            quantity,
+            previousBalance: 0,
+            resultingBalance: quantity,
+            sourceEventId,
+            reason: auditReference || "TACTICAL_CARD_AWARD",
+            metadataJson: JSON.stringify({
+              expiresAt: expiresAt.toISOString(),
+              battleId,
+            }),
+          },
+        });
+
+        return { success: true, grant };
+      });
+    } catch (err: any) {
+      // Concurrency race condition handling:
+      // If two concurrent requests hit with the exact same sourceEventId at the same millisecond,
+      // the second insert will encounter a P2002 Unique Constraint violation.
+      if (err?.code === "P2002" && sourceEventId) {
+        const target = err.meta?.target;
+        const isSourceEventConflict = Array.isArray(target)
+          ? target.includes("sourceEventId")
+          : typeof target === "string"
+          ? target.includes("sourceEventId")
+          : true;
+
+        if (isSourceEventConflict) {
+          const committedGrant = await prisma.toolGrant.findUnique({
+            where: { sourceEventId },
+            include: {
+              toolDefinition: true,
+              supporter: true,
+            },
+          });
+          if (committedGrant) {
+            return { success: false, reason: "ALREADY_GRANTED", grant: committedGrant };
+          }
+        }
+      }
+      throw err;
+    }
   }
 
   /**
